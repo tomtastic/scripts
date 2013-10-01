@@ -1,0 +1,8 @@
+#!/bin/ksh
+# 25/02/2013 - TRCM - highlighting
+
+function highlight {
+    perl -pe "s/${@}/\e[1;31;43m$&\e[0m/g"
+}
+
+highlight "$1"
