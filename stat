@@ -1,0 +1,16 @@
+#!/usr/bin/perl
+
+use strict;
+
+my $filename = shift;
+
+if ($filename){
+    my($dev, $ino, $mode, $nlink, $uid, $gid, $rdev, $size, $atime, $mtime, $ctime, $blksize, $blocks) = stat($filename);
+    $mode =  sprintf "0%04o", $mode & 07777;
+    $atime = localtime($atime) . "  ($atime)";
+    $mtime = localtime($mtime) . "  ($mtime)";
+    $ctime = localtime($ctime) . "  ($ctime)";
+    print "DEVICE: $dev\nINODE: $ino\nMODE: $mode\nNLINK: $nlink\nUID: $uid\nGID: $gid\nRDEV: $rdev\nSIZE: $size\nATIME: $atime\nMTIME: $mtime\nCTIME: $ctime\n";
+} else{
+    print "Please give a file or directory name.\n";
+}
