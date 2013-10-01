@@ -1,0 +1,50 @@
+#!/usr/bin/env perl
+# trcm - june-ish 2013
+# portable /usr/openwin/bin/resize
+
+
+sub ioctl_TIOCGWINSZ(%) {
+# Sets $rows and $cols to values representing the terminals view (cf. environment variables LINES,COLUMNS)
+# use this workaround to avoid needing to query TIOCGWINSZ using C ioctls
+# As long as the system has the stty command, this should be fairly portable
+    chomp (local $stty_cmd=`which stty`);
+    local @line;
+
+    open (STTY, "$stty_cmd -a |") || die "$progname requires $stty_cmd, which we can't open\n";
+    while (<STTY>) {
+        next unless (/columns/);
+        @line=split /;/,$_,4;
+        foreach my $segment (@line) {
+            if ($segment =~ /rows/) {
+            $winsize{ws_row} = $segment;
+            $winsize{ws_row} =~ s/^\D*//;
+            $winsize{ws_row} =~ s/\D*$//;
+            }
+        elsif ($segment =~ /columns/) {
+            $winsize{ws_col} = $segment;
+            $winsize{ws_col} =~ s/^\D*//;
+            $winsize{ws_col} =~ s/\D*$//;
+            }
+        }
+    }
+    return %winsize;
+}
+
+sub do_one() {
+        local %winsize = (
+        ws_row => undef,
+        ws_col => undef
+        );
+
+        %winsize=ioctl_TIOCGWINSZ();
+        if ($winsize{ws_row} > 0) {
+            $ENV{'LINES'} = $winsize{ws_row};
+        }
+        if ($winsize{ws_col} > 0) {
+            $ENV{'COLUMNS'} = $winsize{ws_col};
+        }
+        printf("COLUMNS=%d;\nLINES=%d;\nexport COLUMNS LINES;\n",$ENV{'COLUMNS'},$ENV{'LINES'});
+}
+
+
+do_one;
