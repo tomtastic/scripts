@@ -1,0 +1,134 @@
+#!/usr/bin/env perl
+# 02/07/2013 - TRCM - cleanup (v0.1)
+#                   - overengineer++ (v0.5)
+# 22/08/2013 - TRCM - grok BladeLogic port 4750 (v0.999)
+# 03/09/2013 - TRCM - fix errors from warnings and strict
+#                   - don't write to socket unless we can
+#                   - portable chomp for dos/win style responses
+#                   - add debug mode to view response data (v1.1)
+# 05/09/2013 - TRCM - jiggle output, and early exit on socket data parsing (v2)
+#                   - colour bitches! (v2.5)
+# 18/09/2013 - TRCM - Prelim IPv6 support, not so portable. HTTP parsing (v2.6.4)
+my $version = "2.6.4";
+
+#use IO::Socket::INET6;
+use IO::Socket::INET;
+use IO::Select;
+
+sub trim($);
+sub wtf;
+sub hexprint($);
+
+my $remote_host = ( defined $ARGV[0] ) ? trim($ARGV[0]) : "";
+wtf() if $remote_host =~ /^(-h:--help|)$/;
+my $remote_port = ( defined $ARGV[1] ) ? $ARGV[1] : 22; # default to port 22
+my $timeout = ( defined $ARGV[2] ) ? $ARGV[2] : 3;      # default to 3 seconds
+my $debug = ( defined $ARGV[3] );                       # debug if debug
+#my $socket = IO::Socket::INET6->new(
+my $socket = IO::Socket::INET->new(
+   PeerAddr => $remote_host,
+   PeerPort => $remote_port,
+   Proto    => "tcp",
+   Type     => SOCK_STREAM,
+   Timeout  => $timeout
+);
+my $socket_received;
+my $socket_parsed;
+my $colour_success = 32; # 31=red,32=green,33=yellow
+my $colour_fail = 31;
+my $socket_read_length = 128;
+
+for ($remote_port) {
+   /4750/  && do {
+                      # If we're checking the RSCD(4750/tcp) service, send some magic first
+                      # The clienthello string contents were experimentally found
+                      my $socket_send_rscdinit = "TLS";
+                      my $socket_send_rscdclienthello = pack( 'H*', '16030100490100004503015215ef8253b424768b3a19e6f8def4ebf0157db11d475b97c4d40b3e0af6c26e00001800390038003500160013000a00330032002f0007000500ff0100000400230000' );
+                      if ( () - IO::Select->new($socket)->can_write($timeout) ) {
+                         $socket->send($socket_send_rscdinit);
+                         $socket->send($socket_send_rscdclienthello);
+                         $socket_read_length = 256;
+                      }
+                   };
+   /80/    && do {
+                      # If we're checking the HTTP(80/tcp) service, fire a GET
+                      my $socket_send_httpsinit = "GET / HTTP/1.1\r\nhost: $remote_host\r\n\r\n";
+                      if ( () - IO::Select->new($socket)->can_write($timeout) ) {
+                         $socket->send($socket_send_httpsinit);
+                         $socket_read_length = 1200;
+                      }
+                   };
+}
+
+if ($socket) {
+   # Read from the socket ten times, as responses often be fragmented
+   my @fragments = ( 0,1,2,3,4,5,6,7,8,9 );
+   for my $frag (0 .. $#fragments) {
+      print "debug: $frag\n";
+      if ( defined() - IO::Select->new($socket)->can_read($timeout) ) {
+         $socket->recv($frag,$socket_read_length);
+      }
+      $socket_received = $socket_received . $frag;
+   }
+   close($socket);
+   for ($socket_received) {
+      /^$/                        && do {$socket_parsed = "Nothing"; last;};
+      /^SSH-2.0-IPSSH-1.10.0/     && do {$socket_parsed = "looks like HPLO-100"; last;};
+      /^SSH-2.0-mpSSH_0.0.1/      && do {$socket_parsed = "looks like HPILOv1"; last;};
+      /^SSH-2.0-mpSSH_0.1.0/      && do {$socket_parsed = "looks like HPILOv2"; last;};
+      /^SSH-2.0-mpSSH_0.1.1/      && do {$socket_parsed = "looks like HPILOv2"; last;};
+      /^SSH-2.0-RomSShell_4.62/   && do {$socket_parsed = "looks like HPILOv3"; last;};
+      /^SSH-2.0-OpenSSH_OA/       && do {$socket_parsed = "looks like HP-OA"; last;};
+      /^SSH-2.0-OpenSSH_5.0/      && do {$socket_parsed = "looks like Linux(XSCF)"; last;};
+      /^SSH-2.0-OpenSSH_3.6.1p2/  && do {$socket_parsed = "looks like Linux(XSCF)"; last;};
+      /^SSH-2.0-Sun_SSH/          && do {$socket_parsed = "looks like Solaris"; last;};
+      /Server: /                  && do {m/Server: (.+)/; $socket_parsed=$1; last;};
+      /title/                     && do {m/title>[\r\n]*(.+?)<\/title/sg; $socket_parsed=$1; last;};
+      /rscd/                      && do {$socket_parsed = "looks like BladeLogic RSCD"; last;};
+      $socket_parsed = $socket_received;
+   }
+   # portable chomp
+   $socket_parsed =~ s/\015?\012?$//;
+   if ($debug) {
+      printf("%s, Success, TCP %d, %d secs, %s, %s\n",$remote_host,$remote_port,$timeout,$socket_parsed,hexprint($socket_received));
+   } else {
+      # Great success!
+      if (-t STDOUT) {
+         printf("%s, \e[%dmSuccess\e[m, TCP %d, %d secs, %s\n",$remote_host,$colour_success,$remote_port,$timeout,$socket_parsed);
+      } else {
+         printf("%s,Success,TCP %d,%d secs,%s\n",$remote_host,$remote_port,$timeout,$socket_parsed);
+      }
+   }
+   exit 0;
+} else {
+   # EPIC Fail
+   if (-t STDOUT) {
+      printf("%s, \e[%dmFailure\e[m, TCP %d, %d secs, %s\n",$remote_host,$colour_fail,$remote_port,$timeout,$@);
+   } else {
+      printf("%s,Failure,TCP %d,%d secs,%s\n",$remote_host,$remote_port,$timeout,$@);
+   }
+   exit 1;
+}
+
+sub trim($) {
+   my $string = shift;
+   $string =~ s/^\s+//;
+   $string =~ s/\s+$//;
+   return $string;
+}
+
+sub hexprint($) {
+    my ($string)=@_;
+    my $hex="";
+    my $offset=0;
+    my @bytes=unpack "C*",$string;
+    foreach my $byte (@bytes) {
+        $hex=$hex . sprintf "%02x",$byte;
+        $offset++;
+    };
+    return $hex;
+}
+
+sub wtf {
+   die("Version:  $version\nUsage:  pport hostname [tcp_port] [timeout_secs] [debug]\n");
+}
