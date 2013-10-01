@@ -1,0 +1,43 @@
+#!/bin/bash
+#
+# Check keys in authorized_keys files allowing access without a password
+# We also checksum each key found so we can easily compare and identify duplicate keys
+# TRCM 10/01/2011
+
+function error_exit {
+        echo -e "$*"
+        exit 1
+}
+
+# Set the default user to check as root, or use the 1st cmdline argument
+if [[ $# -eq 0 ]]; then
+      eval username="~root"
+else
+      eval username="~$1"
+fi
+
+# Find my authorized keys files accounting for old SSH versions
+KEYSSHv1="`find $username/.ssh/. ! -name . -prune -type f -name authorized_keys 2>/dev/null`"
+KEYSSHv2="`find $username/.ssh/. ! -name . -prune -type f -name authorized_keys2 2>/dev/null`"
+
+[ $KEYSSHv1 ] && KEYS=$KEYSSHv1
+[ $KEYSSHv2 ] && KEYS=$KEYSSHv2
+[ $KEYS ] || error_exit "Couldn't find an authorized_keys file in $username"
+
+echo "--> $KEYS"
+printf "CHECKSUM     : USERNAME   : HOST\n"
+
+# field 4 will be empty if there are no SSH options present in field 1,
+# in this way, we ensure the read only gets the last two fields
+awk '{print $4 " " $3 " " $2}' $KEYS | \
+   while read comment key; do
+      # digest the comment from the standard user@host
+      echo $comment | awk -F@ '{print $1 " " $2}' | \
+          while read user host; do
+          if [ -z $host ]; then
+              printf "%-12s :            : %s\n" "$(echo $key | cksum | awk '{print $1}')" "$user"
+          else
+              printf "%-12s : %-10s : %s\n" "$(echo $key | cksum | awk '{print $1}')" "$user" "$host"
+          fi
+      done
+   done | sort -n
