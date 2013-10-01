@@ -1,0 +1,400 @@
+#!/usr/bin/env perl
+######################################
+# Requires: Cisco switches with CDP enabled
+# Version:   0 - 2006-12-01 - Andy Welter
+#          1.0 - 2007-08-06 - David Klein <david.klein@db.com>
+#          1.1 - 2008-05-06 - Tom Matthews <tom.matthews@rbs.com>
+#                             Fix GetOpts for compatability with older PERL versions
+#                             We shouldn't need promiscuous mode, this is multicast traffic
+#                             Reduce snaplen to 450 to save kernel streams buffer
+#          1.2 - 2008-06-02 - Tom Matthews <tom.matthews@rbs.com>
+#                           - Fix version | verbose option mismatch
+#          1.3 - 2008-06-06 - Tom Matthews <tom.matthews@rbs.com>
+#                           - Code comments, variable renames, output formatted
+#                           - Duplex reporting fixed
+#                           - VTP Management Domain decoded
+#          1.4 - 2008-06-10 - Tom Matthews <tom.matthews@rbs.com>
+#                           - First draft at Linux support
+#          1.5 - 2008-06-11 - Tom Matthews <tom.matthews@rbs.com>
+#                           - Add timeout so no waiting forever for a CDP packet
+#          1.6 - 2008-08-10 - Tom Matthews <tom.matthews@rbs.com>
+#                           - CDP hold time, version, checksum and packet size added
+#                           - Raise snaplen to 480 for testing (maxsize?)
+#                           - Prototyped subroutines (delta)
+#                           - Test for broken tcpdump on Linux (delta)
+#                           - Address support added (epsilon)
+#          1.7 - 2008-08-15 - Tom Matthews <tom.matthews@rbs.com>
+#                           - IOSVersion support added (alpha)
+#                           - Seperate decoding and output by passing hash from decodePacket (beta)
+#                           - Tidyup (gamma)
+#                           - Capability and Location support added (delta)
+#                           - /usr/bin/env perl - eureka! (epsilon)
+#                           - Addtional packet length 0 error message (zeta)
+#                           - Check kstats on Solaris packet for link status (zeta)
+#                           - Heed some Perl::Critic advice (eta)
+#          1.8 - planned    o Display the assigned IP and MAC of interface being tested
+#                           o Ability to read CDP packet from a dump file
+#                           o Fix "<E> CDP packet timeout waiting on "" !" errors
+############################################
+
+#use strict;
+#use warnings;
+use Getopt::Long;
+use Data::Dumper;
+
+my $version='1.7 eta';   # Minor revisions follow greek alphabet
+my $timeout=60;
+my ($interface,$snoopallifs,$force,$moremagic,$debug);
+my ($snoopCommandVersion,$snoopCommand,$snoopInterfaceArg,$snoopArgs);
+chomp (my $ifconfig_cmd=`which ifconfig`);
+
+# Prototype definitions
+sub init ();           # Parse command line args and check for ifconfig
+sub getCmd ();         # Deduce with which tool to snoop multicast traffic
+sub getAllIfaces ();   # Returns array of configured network interfaces excluding loopback
+sub getPacket ($);     # Return a hex string of the packet returned by snoop command output
+sub decodePacket (%);  # Parse the hex string from getPacket() and output results
+sub hexprint ($);      # Unpack and print hex equivalent string per byte
+sub help ();           # Print usage info
+sub version ();        # Prints cdpinfo version number (-v argument)
+sub prterr ($);        # Prints an error and exit code to stdout
+
+#------------------------------------------------------------------
+&init;
+&getCmd;
+
+for (&getAllIfaces){
+    # Until I know how to handle these, I'd rather not know about them. </kludge>
+    #no warnings 'uninitialized';
+    $interface=$_;
+    printf ("%s %s %s %s\n",$snoopCommand,$snoopInterfaceArg,$interface,$snoopArgs) if $debug;
+    my %display = &decodePacket(&getPacket("$snoopCommand $snoopInterfaceArg $interface $snoopArgs"));
+
+    printf "Interface             : %s\n",$interface;
+    printf "Device ID             : %s\n",$display{DeviceID};
+    printf "Platform              : %s\n",$display{Platform};
+    printf "IOS Version           : %s\n",$display{IOSversion}
+                                         if defined ($display{IOSversion}) & $moremagic;
+    printf "Address               : %s (Protocol %s, Type %s)\n"
+                                         ,$display{Address},$display{Aprotocol},$display{Aprototyp}
+                                         if defined ($display{Address}) & $moremagic;
+    printf "Capability            : %s\n",$display{Capability}
+                                         if defined ($display{Capability}) & $moremagic;
+    printf "Port ID               : %s\n",$display{PortID};
+    printf "Duplex                : [0x%02x] %s\n",$display{Duplex}, ($display{Duplex}) ? "Full" : "Half";
+    printf "Native VLAN           : %d\n",$display{VLAN};
+    printf "VTP Management Domain : %s\n",$display{VTPMgmtDomain} if $moremagic;
+    printf "Location              : %s\n",$display{Location}
+                                         if defined ($display{Location}) & $moremagic;
+    printf "Ver, TTL, Cksum, Size : %d, %dsec, 0x%04x, %dbytes\n"
+                                    ,$display{CDPVersion}
+                                    ,$display{CDPTTL}
+                                    ,$display{CheckSum}
+                                    ,$display{PacketLength} if $moremagic;
+    printf "\n";
+}
+exit 0;
+
+#------------------------------------------------------------------
+sub decodePacket (%) {
+        sub decode_Capability ($);
+        my ($packet)=@_;
+        my $offset;
+        my $string;
+        my ($ftype,$flength);           # Field type and length
+        my %decoded = (
+        DeviceID      => undef,         # 0x0001
+        Address       => undef,         # 0x0002
+        Aprotocol     => undef,         #   ^---- From Address field
+        Aprototyp     => undef,         #   ^---- From Address field
+        Aprotolen     => undef,         #   ^---- From Address field
+        PortID        => undef,         # 0x0003
+        Capability    => undef,         # 0x0004
+        IOSversion    => undef,         # 0x0005
+        Platform      => undef,         # 0x0006
+        IPPrefix      => undef,         # 0x0007 ##Unsupported
+        VTPMgmtDomain => undef,         # 0x0009
+        Power         => undef,         # 0x0010 ##Unsupported
+        MTU           => undef,         # 0x0011 ##Unsupported
+        TrustBitmap   => undef,         # 0x0012 ##Unsupported
+        UntrustedCOS  => undef,         # 0x0013 ##Unsupported
+        SystemName    => undef,         # 0x0014 ##Unsupported
+        SystemOID     => undef,         # 0x0015 ##Unsupported
+        MgmtAddress   => undef,         # 0x0016 ##Unsupported
+        Location      => undef,         # 0x0017
+        ExtPortID     => undef,         # 0x0018 ##Unsupported
+        PowerReq      => undef,         # 0x0019 ##Unsupported (milliwatts)
+        PowerAvail    => undef,         # 0x001a ##Unsupported (milliwatts)
+        PortUniDir    => undef,         # 0x001b ##Unsupported
+        VLAN          => undef,         # 0x000a
+        Duplex        => undef,         # 0x000b
+        CDPVersion    => undef,         # Misc
+        CDPTTL        => undef,         # Misc
+        CheckSum      => undef,         # Misc
+        PacketLength  => length($packet)# Misc
+        );
+
+    if ( $decoded{PacketLength} == 0 ) { &prterr("Packet length is zero, is the interface up?","1") };
+
+    # Parse packet header
+    $offset=22;                         # The CDP packet header starts at offset 22
+    $decoded{CDPVersion} = unpack "C", substr($packet, $offset, 1);
+    $decoded{CDPTTL}     = unpack "C", substr($packet, $offset+1, 1);
+    $decoded{CheckSum}   = unpack "n", substr($packet, $offset+2, 2);
+
+    # Parse packet contents
+    $offset=26;                         # The CDP packet data starts at offset 26
+    while ( $offset < $decoded{PacketLength}-4 ) {
+        $ftype=unpack "n", substr($packet, $offset, 2);
+        $flength=unpack "n", substr($packet, $offset+2, 2);
+        if ( $ftype == 1 ) {
+            $decoded{DeviceID}      = substr($packet,$offset+4,$flength-4);
+        } elsif ( $ftype == 2 ) {
+            $decoded{Address}       = substr($packet,$offset+4,$flength-4);
+            $decoded{Aprototyp}     = unpack "C", substr($decoded{Address},4,1);
+            $decoded{Aprotolen}     = unpack "C", substr($decoded{Address},5,1);
+            $decoded{Aprotocol}     = unpack "C", substr($decoded{Address},6,$decoded{Aprotolen});
+            $decoded{Address}       = join(".",(unpack "C4", substr($decoded{Address},8+$decoded{Aprotolen})));
+        } elsif ( $ftype == 3 ) {
+            $decoded{PortID}        = substr($packet,$offset+4,$flength-4);
+        } elsif ( $ftype == 4 ) {
+            $decoded{Capability}    = &decode_Capability(unpack ("B*",substr($packet,$offset+4,$flength-4)));
+        } elsif ( $ftype == 5 ) {
+            $decoded{IOSversion}    = substr($packet,$offset+4,$flength-4);
+        } elsif ( $ftype == 6 ) {
+            $decoded{Platform}      = substr($packet,$offset+4,$flength-4);
+        } elsif ( $ftype == 9 ) {
+            $decoded{VTPMgmtDomain} = substr($packet,$offset+4,$flength-4);
+        } elsif ( $ftype == 10 ) {
+            $decoded{VLAN}          = unpack "n",substr($packet,$offset+4,$flength-4);
+        } elsif ( $ftype == 11 ) {
+            $decoded{Duplex}        = unpack "c",substr($packet,$offset+4,$flength-4);
+        } elsif ( $ftype == 17 ) {
+            $decoded{Location}      = substr($packet,$offset+4,$flength-4);
+        };
+        $string=substr ($packet,$offset+4,$flength-4);
+        my $fvalue=hexprint ($string);
+        $string=~s/\W/./g;
+
+        $debug && printf "offset=%d, type=0x%04x, length=0x%04x\nHex Value:\n%s\nASCII value:\n%s\n\n",
+        $offset,$ftype,$flength-4,$fvalue,$string;
+
+        if ($flength == 0 ) {
+            $offset=$decoded{PacketLength};
+        };
+        $offset=$offset+$flength;
+    };
+
+    # Decode the layer 2 protocol type
+       if ((sprintf "%02x",$decoded{Aprototyp}) eq "01") { $decoded{Aprototyp}="NLPID"; }
+    elsif ((sprintf "%02x",$decoded{Aprototyp}) eq "02") { $decoded{Aprototyp}="802.2"; }
+     else {$decoded{Aprototyp}="unknown";}
+
+    # Decode the layer 3 protocols (Cisco docs are wrong, 0x0800 != IPv6)
+       if ((sprintf "%02x",$decoded{Aprotocol}) eq "81") { $decoded{Aprotocol}="ISO CLNS"; }
+    elsif ((sprintf "%02x",$decoded{Aprotocol}) eq "cc") { $decoded{Aprotocol}="IPv4"; }
+    elsif ((sprintf "%x",$decoded{Aprotocol}) eq "aaaa030000000800") { $decoded{Aprotocol}="IPv4"; }
+    elsif ((sprintf "%x",$decoded{Aprotocol}) eq "aaaa0300000086dd") { $decoded{Aprotocol}="IPv6"; }
+    elsif ((sprintf "%x",$decoded{Aprotocol}) eq "aaaa03000000809b") { $decoded{Aprotocol}="AppleTalk"; }
+     else {$decoded{Aprotocol}="unknown";}
+
+    # Decode the capability bitmap (must pass this a bit string ala unpack "B*")
+    sub decode_Capability ($) {
+        my $i;
+        my $bitstring=shift;
+        my @CapabilityMatches = (undef,undef,undef,undef,undef,undef,undef);
+        my @CapabilityBitmap = (0x01,0x02,0x04,0x08,0x10,0x20,0x40);
+        my %CapabilityLookup = (
+            0x01=>"[Router]",
+            0x02=>"[Transparent bridge]",
+            0x04=>"[Source Route Bridge]",
+            0x08=>"[Switch]",
+            0x10=>"[Host]",
+            0x20=>"[IGMP]",
+            0x40=>"[Repeater]");
+        for ($i = 0; $i < scalar(@CapabilityBitmap) ; $i++) {
+            if ( $bitstring & $CapabilityBitmap[$i] ) {
+               $CapabilityMatches[$i] = $CapabilityLookup{$CapabilityBitmap[$i]};
+            }
+        }
+        # We use quotes to avoid this getting evaluated in the scalar context in which it is called
+        # As that would evaluate to the length of the array
+        return "@CapabilityMatches";
+    }
+
+    # Return a hash with all the decoded packet values
+    return %decoded;
+}
+
+#------------------------------------------------------------------
+sub getAllIfaces () {
+    my @allIfaces;
+    my @ifaces;
+    open (IFCONFIG, "$ifconfig_cmd |") || die "cannot open $ifconfig_cmd\n";
+    # Solaris and Linux will need different regex to parse the ifconfig output
+    chomp(my $ostyp=`uname -s`);
+    if ( "$ostyp" eq "SunOS" ) {
+        my ($kstat_module,$kstat_instance,$kstat_link); # Used to check link status on Solaris
+        while (<IFCONFIG>){
+                next unless (/^(\w+\d+):\s.*/);
+                next if (/^lo0+:\s.*/);
+                ($kstat_module,$kstat_instance) = ($1 =~ /^(.*)[0-9]*(\d+)/);
+                $kstat_link=`kstat -p -c net -m $kstat_module -i $kstat_instance -s link_up | cut -f2`;
+                $debug && printf "module=%s, instance=%d, linkstatus=%d\n",$kstat_module,$kstat_instance,$kstat_link;
+                if ($kstat_link eq "0") {
+                   print "<W> Solaris says link status on interface " . $kstat_module . $kstat_instance . " is down\n";
+                   next;
+                }
+                push @allIfaces, $kstat_module.$kstat_instance;
+        }
+    } elsif ( "$ostyp" eq "AIX" || "$ostyp" eq "Linux" ) {
+        while (<IFCONFIG>){
+                next unless (/^(\w+\d+)\s.*/);
+                next if (/^lo0+\s.*/);
+                push @allIfaces, $1;
+        }
+    } else {
+        &prterr("Unknown OS","1");
+    }
+
+    if ($snoopallifs){
+        @ifaces=@allIfaces;
+    } else {
+        if ($force){
+                push @ifaces, $interface;
+        } else {
+        &prterr("No interface specified!","1") unless ($interface);
+                for (@allIfaces){
+                        if ($_ eq "$interface"){
+                                push @ifaces, $interface;
+                        }
+                }
+        }
+    }
+
+    &prterr("Interface \"$interface\" is not available!","1") unless (@ifaces);
+    close IFCONFIG;
+    return @ifaces;
+}
+
+#------------------------------------------------------------------
+sub getCmd () {
+    chomp(my $ostyp=`uname -s`);
+    if ( "$ostyp" eq "SunOS" ) {
+        chomp($snoopCommand=`which snoop`);
+                $snoopInterfaceArg="-d";
+                # For some reason on some boxes we _must_ listen promisc or we miss the CDP
+                # $snoopArgs=" -P -s 480 -x0 -c 1 'ether[20:2] = 0x2000' 2>/dev/null";
+                $snoopArgs=" -s 480 -x0 -c 1 'ether[20:2] = 0x2000' 2>/dev/null";
+    }elsif ( "$ostyp" eq "AIX" || "$ostyp" eq "Linux" ) {
+        chomp($snoopCommand=`which tcpdump`);
+        chomp($snoopCommandVersion=`rpm -q --whatprovides $snoopCommand`);
+        if ( "$snoopCommandVersion" eq "tcpdump-3.7.2-7.E3.5" ) {
+            # tcpdump 3.7.2 on RHEL3 doesn't understand -xx so we don't get the link level header
+            # tcpdump 3.8.2 is fine. (present on RHEL4 and later)
+            &prterr("cdpinfo cannot parse output from tcpdump versions less than 3.8, sorry.","1");
+        }
+                $snoopInterfaceArg="-i";
+                # When printing in hex, include link level header with -xx
+                $snoopArgs=" -s 480 -xx -c 1 'ether [20:2] = 0x2000' 2>/dev/null";
+    }else {
+                &prterr("Unknown OS","1");
+    }
+        unless ($snoopCommand){
+                &prterr("No command found","1");
+        }
+}
+
+#------------------------------------------------------------------
+sub getPacket ($) {
+    local $SIG{PIPE} = 'IGNORE';   # We get a broken pipe if the timeout interrupts the snoop
+    my $interface = $_[2];
+    local $SIG{ALRM} = sub{&prterr("CDP packet timeout waiting on \"$interface\" !","1")};
+    alarm ($timeout);
+
+    open (GETPACKET, "@_ |") || die "cannot open $interface\n";
+    my @data;
+    my $packet;
+    while (<GETPACKET>){
+        chomp;
+        print "$_\n" if $debug;
+        if (/^\s+\w+:/) {
+            s/^\s+//;
+            @data=split /\s+/,$_,10;
+            shift @data;
+            pop @data;
+            foreach my $bytes (@data) {
+            $packet=$packet . pack "H4", $bytes;
+            };
+        };
+    };
+    close GETPACKET;
+    alarm(0);
+    return $packet;
+}
+
+#------------------------------------------------------------------
+sub hexprint ($) {
+    my ($string)=@_;
+    my $hex="";
+    my $offset=0;
+    my @bytes=unpack "C*",$string;
+    foreach my $byte (@bytes) {
+        $hex=$hex . sprintf "%02x ",$byte;
+        $offset++;
+    };
+    return $hex;
+};
+
+#------------------------------------------------------------------
+sub init () {
+    &prterr("No argument given!  Please use -h for help.","1") unless (@ARGV);
+
+    GetOptions  ('i|interface=s' => \$interface,
+                 'a|all' => \$snoopallifs,
+                 'f|force' => \$force,
+                 'd|debug' => \$debug,
+                 'v|version' => \&version,
+                 'h|help' => \&help,
+                 'm|moremagic' => \$moremagic
+    );
+
+    if ($ifconfig_cmd){
+        $ifconfig_cmd.=" -a";
+    }else {
+        &prterr("ifconfig not found!","1");
+    }
+}
+
+#------------------------------------------------------------------
+sub help () {
+    print <<EOF;
+
+Usage: cdpinfo [-avhi] interface
+
+Arguments:
+ -i, --interface      scan named interface
+ -a, --all            scan all configured interfaces
+ -f, --force          forces scan of an interface not available via ifconfig
+ -d, --debug          print debug information
+ -v, --version        print version
+ -h, --help           prints this help
+ -m, --moremagic
+
+EOF
+    exit 0;
+}
+
+#------------------------------------------------------------------
+sub prterr ($) {
+    my $Message=shift;
+    my $ExitCode=shift;
+    print STDERR "<E> $Message\n";
+    exit $ExitCode;
+}
+
+#------------------------------------------------------------------
+sub version () {
+    print "$version\n";
+    exit 0;
+}
