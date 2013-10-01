@@ -1,0 +1,29 @@
+#!/usr/bin/perl
+# Check the age of a file
+# Useful only when you want the age of a file in units less than one day.
+# For all other cases, use find -mtime.
+#
+# 07/03/2012 - TRCM - Rough Draft
+use strict;
+
+# Change as you see fit
+my $age_hours = 6;
+my $age_secs = $age_hours*60*60;
+my $time_epoch = time();
+
+my $filename = shift;
+open(FD,"<$filename") or die "$filename: $!\n";
+
+if ($filename){
+    my($dev, $ino, $mode, $nlink, $uid, $gid, $rdev, $size, $atime, $mtime, $ctime, $blksize, $blocks) = stat(FD);
+    print "File modification timestamp : " . localtime($mtime) . "\n";
+
+    if (($time_epoch - $mtime) < $age_secs) {
+        print "File modified in last " . $age_hours . " hours.\n";
+    } else {
+        print "File not modified in last " . $age_hours . " hours.\n";
+    }
+
+} else{
+    print "Please give a file or directory name.\n";
+}
