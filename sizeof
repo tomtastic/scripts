@@ -1,0 +1,15 @@
+#!/usr/bin/perl
+# 14/05/2012 - TRCM - get the size of a file
+# Useful for users wanting to know raw device sizes
+
+use strict;
+my $filename = shift;
+
+if ($filename){
+    my($dev, $ino, $mode, $nlink, $uid, $gid, $rdev, $size, $atime, $mtime, $ctime, $blksize, $blocks) = stat($filename);
+    printf "SIZE(bytes): %u\n",$size;
+    printf "SIZE(   MB): %.3f\n",$size/1024/1024;
+    printf "SIZE(   GB): %.3f\n",$size/1024/1024/1024;
+} else{
+    print "Please give a file or directory name.\n";
+}
