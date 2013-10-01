@@ -1,0 +1,6 @@
+#!/usr/bin/env perl
+for ($! = 1; $! <= 256; $!++) {
+    $errText = $!;
+    chomp($errText);
+    printf("%04d: %s\n", $!, $errText) if $! ne "Unknown Error";
+}
