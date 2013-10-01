@@ -1,0 +1,106 @@
+#!/usr/bin/perl
+# Author: David Klein
+# Contact: david.klein@db.com
+#
+# 2013-10-01 - 1.2 - tom.matthews@db.com - Optional randomisation of output
+# 2005-04-29 - 1.1 - markus.herber@db.com - string/interger correction and code cleanup
+# 2005-04-15 - 1.0 - david.klein@db.com - Initial release
+
+use strict;
+#use warnings;
+use Getopt::Long;
+
+# DECLARE VARIABLES
+##########################################
+
+my $reverse=0;
+my $randomise;
+my @range;
+my $delim="\n";
+my $stringBegin='';
+my $stringEnd='';
+sub randarray (@);
+
+# FUNCTIONS
+##########################################
+
+sub help{
+    print
+"
+NAME
+       range - prints a range between two numbers or letters
+
+SYNOPSIS
+       range ARGUMENT(s) num1|letterA num2|letterB
+
+ARGUMENTS
+        -h, --help                      prints this screen
+        -d, --delim STRING              use as delimiter
+        -r, --reverse                   reverses sort order
+        -n, --randomise                 randomises sort order
+        -sb, --string-begin STRING      prepend to range entries
+        -se, --string-end STRING        append to range entries
+
+";
+
+    exit 0;
+}
+
+sub randarray(@) {
+        my @array = @_;
+        my @rand = undef;
+        my $seed = $#array + 1;
+        my $randnum = int(rand($seed));
+        $rand[$randnum] = shift(@array);
+        while (1) {
+                my $randnum = int(rand($seed));
+                if ($rand[$randnum] eq undef) {
+                        $rand[$randnum] = shift(@array);
+                }
+                last if ($#array == -1);
+        }
+        return @rand;
+}
+
+# MAIN
+##########################################
+
+GetOptions (    'h|help'                => \&help,
+                'd|delim=s'             => \$delim,
+                'r|reverse'             => \$reverse,
+                'n|randomise'           => \$randomise,
+                'sb|string-begin=s'     => \$stringBegin,
+                'se|string-end=s'       => \$stringEnd
+            );
+
+&help unless @ARGV == 2;
+my( $a, $b ) = @ARGV;
+my $chk = "$a,$b";
+if( $chk =~ /^\d+,\d+$/ ){
+    if( $a > $b ) {
+        $reverse = 1 - $reverse;
+        ( $a, $b ) = ( $b, $a );
+    }
+} elsif( ($chk =~ /^[A-Z],[A-Z]$/) ||
+         ($chk =~ /^[a-z],[a-z]$/) ) {
+    if( $a gt $b ) {
+        $reverse = 1 - $reverse;
+        ( $a, $b ) = ( $b, $a );
+    }
+
+} else {
+    print STDERR "
+
+Range arguments must be both numbers, lowercase characters, or
+uppercase characters, and not a mix of numbers and characters!
+
+";
+    &help();
+}
+
+@range = $a .. $b;
+@range = reverse(@range) if $reverse;
+@range = randarray(@range) if $randomise;
+print join( $delim, map{ "$stringBegin$_$stringEnd" } @range ), "\n";
+
+exit 0;
