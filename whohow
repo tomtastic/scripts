@@ -1,0 +1,29 @@
+#!/bin/bash
+# 31/05/2012 - TRCM - whohow
+# Walk down the process tree and build a list of users
+
+MYPID=$(pgrep -f -- $0)
+loop=0
+ptree $$ | while read PID PROC blah blah blah blah blah;
+   do
+   # Ignore the ptree process which is part of our script
+   if [[ "$PROC"x == "ptree"x ]]; then
+      break 1
+   fi
+   # Ignore this scripts process too
+   if [[ "$PID"x == "$MYPID"x ]]; then
+      break 1
+   fi
+
+   if [[ $loop -ge 1 ]]; then
+      /usr/bin/echo " -> \c"
+   fi
+
+   USER=`ps -o user -p $PID | tail -1 | sed -e 's/^\ *//;s/\ *$//'`
+   PROC=`echo $PROC | sed 's/.*\///'`
+   /usr/bin/echo "$PID($USER)$PROC\c"
+
+   ((loop+=1))
+done
+
+echo
