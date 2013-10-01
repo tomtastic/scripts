@@ -1,0 +1,4 @@
+#!/usr/bin/perl
+$epoch=@ARGV[0];
+my $date = localtime $epoch;
+print "$date\n";
