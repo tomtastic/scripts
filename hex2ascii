@@ -1,0 +1,17 @@
+#!/usr/bin/perl
+# 2013 - TRCM
+binmode(STDOUT, ":utf8");
+my $hex = join('',@ARGV);
+
+if ($hex =~ /:/) {
+   $hex =~ s/[: ]//g;
+}
+
+print "HEX    - " . join(":",unpack("A*",$hex) =~ m/(..)/g) . "\n";
+my $ascii = join("  ",pack("H*",$hex) =~ m/(.)/g);
+my $string = join("",pack("H*",$hex) =~ m/(.)/g);
+# Print the unprintable as unicode
+$ascii =~ tr[\0-\x1F\x7F] [\x{2400}-\x{241F}\x{2421}];
+$string =~ tr[\0-\x1F\x7F] [\x{2400}-\x{241F}\x{2421}];
+print "ASCII  - " . $ascii . "\n";
+print "STRING - " . $string . "\n";
