@@ -1,0 +1,12 @@
+#!/usr/bin/perl -w
+
+use strict;
+
+my $HexIP;
+
+for my $f (split(/\./,shift)){
+    $HexIP .= sprintf("%02x", $f);
+}
+$HexIP =~ s/(\w+)/\U$1/gi;
+
+print "$HexIP\n";
