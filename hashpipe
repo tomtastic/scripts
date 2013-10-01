@@ -1,0 +1,261 @@
+#!/usr/bin/env perl
+# Smoking fast PAC data using named pipes and hash lookup tables.
+#
+# 18/04/2013 - TRCM - Many orders of magnitude speed boost for PAC data lookups
+# 19/04/2013 - TRCM - Regenerate the PAC hash if the disk copy is >= 24 hours old
+#            - TRCM - Accept lookups of FQDN and short host name
+# 22/04/2013 - TRCM - Incorporate CyberArk safe lookup fields for JHW
+# 01/08/2013 - TRCM - grep is slow, build another lookup table to avoid non-fqdn performance hit
+#
+# BUGS : race conditions with named pipes (probably)
+
+use Storable;
+use warnings;
+use File::Basename qw(basename);
+use Benchmark qw(cmpthese);
+
+# You only really need to modify the following :
+my $pac_file = "/home/pacman/ALL_PAC.TXT";
+my $root = "/home/matttom/";
+my $data = $root . "";
+my $pipes = $data . "";
+my $pac_hash_cache_lifetime = 24; # hours
+my $version = "1.0";
+umask 022;
+
+#------------------------------------------------------------------------
+# Initialise some prototypes and scalars for use later
+sub count_lines($);
+sub progress_bar($$$$);
+sub pac_lookup($);
+sub fqdn_lookup($);
+sub pac_refresh($$);
+sub checksum();
+
+printf("\e[%dm%s\e[m - %s (cksum:%s) - (PERL @ v%s)\n",33,basename($0),$version,checksum(),$]);
+my $pac_hash_cache = $data . "pac_hashpipe_cache";
+my $hashpipe_in = $pipes . "pac_hashpipe_in";
+my $hashpipe_out = $pipes . "pac_hashpipe_out";
+# Check hash is fresh
+pac_refresh($pac_hash_cache_lifetime,$pac_hash_cache);
+# Load hash from disk / regenerate.
+my %pac = pac_lookup($pac_file);
+my %fqdn = fqdn_lookup(\%pac);
+my ($pipe_count, $fail_count) = (0) x 2;
+my @spinner = (' |',' /',' -',' \\');
+$SIG{INT} = sub{system("rm -f $hashpipe_in $hashpipe_out");die "\r\n ! Closing pipes after $pipe_count requests.\e[K\n"};
+$SIG{QUIT} = sub{pac_refresh(0,$pac_hash_cache),%pac = pac_lookup($pac_file),fqdn_lookup(\%pac)};
+
+#------------------------------------------------------------------------
+# Prepare the pipes please...
+if ( ! -p $hashpipe_in ) {
+        system("rm -f $hashpipe_in");
+        #printf STDERR (" + Creating pipe input : $hashpipe_in\n");
+        printf (" + Creating pipe input : $hashpipe_in\n");
+        system("/usr/sbin/mknod $hashpipe_in p");
+        system("/usr/bin/chmod 666 $hashpipe_in");
+}
+if ( ! -p $hashpipe_out ) {
+        system("rm -f $hashpipe_out");
+        #printf STDERR (" + Creating pipe output : $hashpipe_out\n");
+        printf (" + Creating pipe output : $hashpipe_out\n");
+        system("/usr/sbin/mknod $hashpipe_out p");
+        system("/usr/bin/chmod 666 $hashpipe_out");
+}
+
+#printf STDERR (" + Reading from pipe...\n");
+printf (" + Reading from pipe...\n");
+open my $pipe_in_fh, '<', $hashpipe_in or die $!;
+while (1) {
+        while (defined (my $pipehost = <$pipe_in_fh>)) {
+                $pipe_count++;
+                # We want our pipes to be piping hot
+                local $| =1;
+                local $SIG{PIPE}=sub{print STDERR " - pipe death?\n"};
+                chomp $pipehost;
+                # If were passed nothing, skip to the next input
+                if ($pipehost eq "") {
+                        $fail_count++;
+                        open my $pipe_out_fh, '>', $hashpipe_out or die $!;
+                        #printf STDERR (" - no lookup data for blank pipehost \"%s\"\n", $pipehost);
+                        printf $pipe_out_fh ("NOPACDATA\n");
+                        close $pipe_out_fh or die{"bad pipe: $! $?"};
+                        next;
+                }
+                $pipehost =~ tr/[A-Z]/[a-z]/;
+        # No no no, this was horribly slow because of the grep
+                # If we're passed a non-FQDN, find it's matching FQDN host in the hash before we continue
+                #if ($pipehost !~ /\./) {
+                #       if (grep /^$pipehost\./, keys %pac) {
+                #               ($pipehost) = grep /^$pipehost\./, keys %pac;
+                #       }
+                #}
+        # Check this extra lookup table instead
+                if ($pipehost !~ /\./) {
+                        if (defined ($fqdn{$pipehost}{'DATA'})) {
+                                $pipehost = $fqdn{$pipehost}{'DATA'};
+                        } else {
+                                printf STDERR ("Exception: no lookup for pipehost %s\n", $pipehost);
+                        }
+                }
+                if (defined ($pac{$pipehost}{'DATA'})) {
+                        open my $pipe_out_fh, '>', $hashpipe_out or die $!;
+                        printf $pipe_out_fh ("%s\n",$pac{$pipehost}{'DATA'});
+                        # Camel book suggests thusly, personally think slow and not necessary?
+                        #select(undef,undef,undef,0.2);
+                        close $pipe_out_fh or die{"bad pipe: $! $?"};;
+                } else {
+                        $fail_count++;
+                        open my $pipe_out_fh, '>', $hashpipe_out or die $!;
+                        #printf STDERR (" - no lookup data for pipehost \"%s\"\n", $pipehost);
+                        printf $pipe_out_fh ("%s,NOPACDATA\n",$pipehost);
+                        # Camel book suggests thusly, personally think slow and not necessary?
+                        #select(undef,undef,undef,0.2);
+                        close $pipe_out_fh or die{"bad pipe: $! $?"};;
+                }
+                #printf STDERR (" + Processed \[$fail_count/$pipe_count\] bad/total requests \t $spinner[$pipe_count%4]\r");
+                printf (" + Processed \[$fail_count/$pipe_count\] bad/total requests \t $spinner[$pipe_count%4]\r");
+        }
+}
+close $pipe_in_fh;
+# Done.
+
+#------------------------------------------------------------------------
+# Read PAC into hash keyed on servername with PAC data as 'DATA'
+sub pac_lookup($) {
+        # Check if we have a cache of the results
+        if ( -f  $pac_hash_cache ) {
+                #printf STDERR (" + Reading PAC hash from disk...\n");
+                printf (" + Reading PAC hash from disk...\n");
+                %pac = %{retrieve($pac_hash_cache)} or die $!;
+        } else {
+                #printf STDERR (" + Creating PAC hash cache ...\n");
+                printf (" + Creating PAC hash cache ...\n");
+                my $pacfile = shift;
+                open my $pac_fh, '<', $pac_file or die $!;
+                my $pac_numlines = count_lines($pac_fh);
+                my $line_count=0;
+
+                seek $pac_fh,0,0;
+                while (defined (my $pacline = <$pac_fh>)) {
+                        # Hacky hack Mc.Hack
+                        #no warnings 'uninitialized';
+                        $line_count++;
+                        chomp $pacline;
+                        @fields = split (",", $pacline);
+                        $host                 =  $fields[0];
+# Start of JHW enrichment -v-v-v-v-v-v-v-v-v-v-v-v-v-v-v-v-v-v-v-v-v-v-v-
+                        my $cyberarkregion;
+
+                        $fields[5]='' unless $fields[5];
+                        $fields[28]='' unless $fields[28];
+                        if ($fields[2] =~ /\//){
+                                @Location=split('/',$fields[2]);
+                                $Location[2]='NONE' unless $Location[2];
+                                $Location[3]='NONE' unless $Location[3];
+                                $Location[4]='NONE' unless $Location[4];
+                        } elsif (!defined $fields[2]){
+                                $Location[2]='NONE';
+                                $Location[3]='NONE';
+                                $Location[4]='NONE';
+                        } else{
+                                $Location[2]=$fields[2];
+                                $Location[3]='NONE';
+                                $Location[4]='NONE';
+                        }
+                        if ($Location[2] =~ "ASIA PACIFIC") {
+                                $cyberarkregion="APAC";
+                        } elsif ($Location[2] =~ "EMEA (EXCLUDING GERMANY & UK)" || $Location[2] =~ "GERMANY" ) {
+                                $cyberarkregion="EMEA";
+                        } else {
+                                $cyberarkregion=$Location[2];
+                        }
+                        my $country = $Location[3];
+                        my $lcountry = $country;
+                        $lcountry =~ s/ //g;
+                        my $lookup=$cyberarkregion . $country . $fields[5] . $fields[28];
+#                       printf STDERR ("%s,%s_,%s,%s,%s,%s\n", $pacline , $lookup , $Location[2] , $cyberarkregion , $country ,  $lcountry);
+
+                        my $pac_enriched = sprintf("%s,%s_,%s,%s,%s,%s", $pacline , $lookup , $Location[2], $cyberarkregion ,$country ,  $lcountry);
+                        $pac{$host}->{'DATA'} =  $pac_enriched;
+# End of JHW enrichment -^-^-^-^-^-^-^-^-^-^-^-^-^-^-^-^-^-^-^-^-^-^-^-^-
+                        #$pac{$host}->{'DATA'} =  $pacline;
+
+                        if ($line_count%250 == 0) {
+                        # Flush to STDOUT as it happens, don't buffer.
+                        local $| = 1;
+                                #print STDERR progress_bar( $line_count, $pac_numlines, 40, '=' );
+                                print progress_bar( $line_count, $pac_numlines, 40, '=' );
+                        }
+                }
+                close $pac_fh;
+                #printf STDERR ("\r + Saving PAC hash cache to disk...\e[K\n");
+                printf ("\r + Saving PAC hash cache to disk...\e[K\n");
+                store \%pac, $pac_hash_cache or die $!;
+        }
+        return %pac;
+}
+#------------------------------------------------------------------------
+sub fqdn_lookup($) {
+        my $hashref=shift;
+        my %pac_fqdn=%$hashref;
+        my %host_short;
+        my @pac_short;
+        printf STDERR (" + Generating FQDN map...");
+        foreach my $host_fqdn (keys %pac_fqdn) {
+                @pac_short = split (/\./, $host_fqdn);
+                if (defined($pac_short[0])) {
+                        my $pcs = $pac_short[0] . "-m";
+                        $host_short{$pac_short[0]}->{'DATA'} =  $host_fqdn;
+                        $host_short{$pcs}->{'DATA'} =  $host_fqdn;
+                }
+        }
+        printf STDERR (" Complete\n");
+        return %host_short;
+
+}
+#------------------------------------------------------------------------
+sub pac_refresh($$) {
+        # Take the acceptable lifetime in hours
+        my $lifetime_hours = shift;
+        my $filename = shift;
+        my $lifetime_secs = $lifetime_hours*60*60;
+        my $time_epoch = time();
+        open(FD,"<$filename") or return;
+
+        if ($filename) {
+                #my($dev, $ino, $mode, $nlink, $uid, $gid, $rdev, $size, $atime, $mtime, $ctime, $blksize, $blocks) = stat(FD);
+                my(undef, undef, undef, undef, undef, undef, undef, undef, undef, $mtime, undef, undef, undef) = stat(FD);
+                $lifetime_hours = ($time_epoch - $mtime)/60/60;
+                if (($time_epoch - $mtime) > $lifetime_secs) {
+                        printf(" - removing stale PAC cache which is %.1f hours old\n",$lifetime_hours);
+                        system("rm -f $filename");
+                } else {
+                        printf(" + PAC cache is %.1f hours old\n",$lifetime_hours);
+                }
+        }
+        close(FD);
+}
+#------------------------------------------------------------------------
+sub progress_bar ($$$$) {
+        my ( $curr, $total, $width, $char ) = @_;
+        $width ||= 25; $char ||= '=';
+        my $num_width = length $total;
+        sprintf "[%-${width}s] read %${num_width}s lines of %s total PAC data (%.1f%%)\r",
+                        $char x (($width-1)*$curr/$total). '>',
+                        $curr, $total, 100*$curr/+$total;
+}
+#------------------------------------------------------------------------
+sub count_lines($) {
+        my ($fh) = shift;
+        @_=<$fh>;
+        my $count = $.;
+        return $count;
+}
+#------------------------------------------------------------------------
+sub checksum() {
+        my $command = `cat $0 | cksum`;
+        chomp $command;
+        my @cksum = split(/\s+/,$command);
+        return $cksum[0];
+}
