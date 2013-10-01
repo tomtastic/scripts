@@ -1,0 +1,21 @@
+#!/bin/bash
+function n {
+   while [[ $c -lt 3 ]];
+      do
+      ((p+=1))
+      ((c+=1))
+      banner "$p potato"
+      sleep 1
+      tput cuu 8
+      tput ed
+   done
+}
+
+n
+((p+=1))
+banner $p
+tput cuu 8
+sleep 1
+c=0
+n
+banner more
