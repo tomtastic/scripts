@@ -1,0 +1,7 @@
+#!/usr/bin/perl
+# 2013 - TRCM
+my $text = join(' ',@ARGV);
+
+print "STRING - " . join("",unpack("A*",$text) =~ m/(.)/g ) . "\n";
+print "ASCII  - " . join("  ",unpack("A*",$text) =~ m/(.)/g ) . "\n";
+print "HEX    - " . join(":",unpack("H*",$text) =~ m/(..)/g ) ."\n";
