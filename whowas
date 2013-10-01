@@ -1,0 +1,295 @@
+#!/usr/bin/env perl
+####################################################################################
+# Author: Tom Matthews
+# Created: August 20th 2007
+# Description: My PERL implementation/improvement of last
+# History: (reverse chronological)
+#  24/04/13 - Draft support for Linux
+#  28/06/11 - Parse unknown type fields rather than quit.
+#  24/11/09 - Check $id for ftp or uucp and set $line accordingly
+#             Revise hash key to be concatenation of $pid and $line
+#  27/06/08 - Raw mode complete
+#             Truncate the host record to avoid the trailing garbage (finally!)
+#  13/02/08 - Revise hashing logic to include all events, not just logins
+#  12/02/08 - First working version with hashes, having fixed the hashing logic
+#  17/10/07 - First stab at implementing hashes to tie up login and logout events
+#             Add a header line to the output so people know what this garbage is
+#             Fix getopts handling of invalid options (now return usage and die)
+#             Prototype the subroutines and move them to the end to improve readability
+#  16/10/07 - Add user argument to select only those records pertaining to a certain user
+#             Use Getopt::Std over Long, and fix options processing
+#             Speed improvement by skipping those records which aren't the user argument
+#             Add downtime and accounting types
+#  23/08/07 - Fix the day of week subroutine, 0 != Monday
+#  21/08/07 - Evaluation of utmpx 'type' of entry
+#             Understanding of timeval32 and subsequent dropping of tv_2 (who needs useconds?)
+#             Uses printf over print for better formating of output
+#             Addition of subroutines to evaluate day of week and month of year
+#  20/08/07 - Initial attempt to parse the wtmpx format
+#
+# ToDo
+#  (cosmetic) - Print results sorted by login date
+#  (major) - Store the last BOOT_TIME in bootxtime and initialise all logouts to that
+#  (cosmetic) - Fix localtime output to match header and do the login time duration conversion
+#  (major) - Print results in chronological order (two passes needed?)
+#  (major) - Handle logins before the specified date that dont logout until during or after
+#            To allow us to specify a date and see who was logged in over that period
+#
+####################################################################################
+# struct utmpx {
+#        char    ut_user[32];         /* user login name */
+#        char    id[4];               /* inittab id */
+#        char    line[32];            /* device name (console, lnxx) */
+#        pid32_t pid;                 /* process id */
+#        int16_t type;                /* type of entry */
+#        struct {
+#                int16_t e_term;      /* process termination status */
+#                int16_t e_exit;      /* process exit status */
+#        } exit;                      /* exit status of a process */
+#        struct timeval32 tv;         /* time entry was made */ (tv_1=seconds,tv_2=useconds)
+#        int32_t session;             /* session ID, user for windowing */
+#        int32_t pad[5];              /* reserved for future use */
+#        int16_t syslen;              /* significant length of host */
+#        char    host[257];           /* remote host name */
+# };
+####################################################################################
+
+use strict;
+use vars qw/ %opts /;
+my $file='/var/adm/wtmpx';
+# Good for Solaris>=8, will likely need adjusting for anything else
+#my $template = "A32 A4 A32 l s ss xx ll l lllll s A257 x";
+#                                                       ^-- A null byte
+# Good for Linux?
+my $template = "s l A12 A4 A32 A256 ss l ll llll A20 x";
+#                                                      ^-- A null byte
+my $recordsize = length(pack($template,(  )));
+my $record;
+my @data;
+my %event_hash;
+my @session_list;
+
+# Our prototype definitions
+sub init ();
+sub header ();
+sub typeis ($);
+sub dayis ($);
+sub monthis ($);
+sub scan ();
+sub display ();
+
+# Get any options the user may have passed
+init();
+
+if ($opts{f}) {$file = $opts{f}};
+open(FD,"<$file") or die "$file: $!\n";
+
+# Print a header line which will check what columns we're expecting
+header();
+
+# Scan the wtpmx database and build a list of complete sessions
+scan();
+
+# Display the complete sessions we've extracted
+display();
+
+exit 0;
+
+#------------------------------------------------------------------
+sub scan () {
+   while(read(FD,$record,$recordsize)) {
+      # Dont bother to unpack if the user is not what we asked for (should be faster).
+      unless ($opts{r}) {next if (($opts{u}) && (substr($record,0,length($opts{u})) ne $opts{u}))};
+
+# debug
+#unless (length($record) eq "372") {
+unless (length($record) eq "363") {
+    my $hex="";
+    my $offset=0;
+    my @bytes=unpack "C*",$record;
+    foreach my $byte (@bytes) {
+        $hex=$hex . sprintf "%02x ",$byte;
+        $offset++;
+    };
+      print "RECORD PARSE ERROR, length is ",length($record),", string was : ",$hex,"\n";next };
+
+      # Unpack the wtmpx database according to the template defined
+   #   my ($ut_user,$id,$line,$pid,$type,$exit_1,$exit_2,$tv_1,$tv_2,
+   #        $session,$pad_1,$pad_2,$pad_3,$pad_4,$pad_5,$syslen,$host)
+   #        = unpack($template, $record);
+
+      # Linux support?
+      my ($type,$pid,$line,$id,$ut_user,$host,$exit_1,$exit_2,
+           $session,$tv_1,$tv_2,$syslen,undef)
+           = unpack($template, $record);
+
+      # Check ut_type is BOOT_TIME or DOWN_TIME and set ut_user to 'reboot'
+      if ($type eq "2" || $type eq "10") {$ut_user="reboot"};
+
+      # Bung shutdown events straight into the session log, blank $line as irrelevent
+      if ($type eq "0" || $ut_user eq "shutdown") {
+         push (@session_list, [$pid,$ut_user,$type,$id,$session,'',$syslen,$host,$tv_1,$tv_1]);
+         next;
+         };
+
+      # Check if substr($line,0,3) eq "ftp" and set line to id
+      if (substr($line,0,3) eq "ftp") {$line=$id};
+      if (substr($line,0,3) eq "uucp") {$line=$id};
+
+      # For any non-logout (8 = DEAD) events add them to the stack, and skip to the next record
+      # Unless we've been requested to use raw mode
+      #print  "debug : ".substr($type,0,1)." \n";
+      if ($opts{r}) {
+         push (@{$event_hash{$pid.$line}},[$pid,$ut_user,$type,$id,$session,$line,$syslen,$host,$tv_1]);
+         push (@session_list, [@{shift @{$event_hash{$pid.$line}}}]);
+         next;
+         }
+      elsif ($type && substr($type,0,1) ne "8") {
+         #print  "debug : Not a logout, push (".$pid.") onto event_hash\n";
+         push (@{$event_hash{$pid.$line}},[$pid,$ut_user,$type,$id,$session,$line,$syslen,$host,$tv_1]);
+         next;
+         }
+      # Check event_hash for a matching pid to form a complete session
+      elsif (exists $event_hash{$pid.$line}) {
+         #print  "debug : Found matching (".$pid.") of type (".$type."), fall through and add to session_list \n";
+         }
+      # We couldn't find a matching record, skip to the next record
+      else {
+         warn "<Unmatched> User: $ut_user, Type: $type, PID: $pid, Line: $line, Time: ".scalar localtime($tv_1).", Host: $host\n";
+         next;
+      }
+
+      unless ($opts{r}) {
+      # Create a list of lists using the previous login and this logout event
+      # session_list = $pid[0],$ut_user[1],$type[2],$id[3],$session[4],$line[5],$syslen[6],$host[7],$tv_1[8],tv_1[9]
+      push (@session_list, [@{shift @{$event_hash{$pid.$line}}},$tv_1]);
+
+      # If no more events for this pid left in the stack, remove from hash
+      delete $event_hash{$pid.$line} unless (@{$event_hash{$pid.$line}});
+      }
+
+   }
+   close(FD);
+}
+
+#------------------------------------------------------------------
+sub display () {
+   foreach my $session (@session_list) {
+   # session_list = $pid[0],$ut_user[1],$type[2],$id[3],$session[4],$line[5],$syslen[6],$host[7],$tv_1[8],tv_1[9]
+   my $hostname = substr($$session[7],0,$$session[6]);
+
+   # Print the session out (including the inittab id if requested)
+   if ($opts{i} && $opts{s}){
+      printf ("%-9s %-5s %5d %-4s %8d %-12s ",$$session[1], typeis($$session[2]),$$session[0],$$session[3],$$session[4],$$session[5]); }
+   elsif($opts{i}){
+      printf ("%-9s %-5s %5d %-4s %-12s ",$$session[1], typeis($$session[2]),$$session[0],$$session[3],$$session[5]);}
+   elsif($opts{s}){
+      printf ("%-9s %-5s %5d %8d %-12s ",$$session[1], typeis($$session[2]),$$session[0],$$session[4],$$session[5]);}
+   else{
+      printf ("%-9s %-5s %5d %-12s ",$$session[1],typeis($$session[2]),$$session[0],$$session[5]);}
+   if($opts{r}){
+      print "" . localtime($$session[8]) ;}
+   else{
+      print localtime($$session[8]) . " - " . localtime($$session[9]);}
+   print ("\t".$hostname."\n");
+   }
+}
+
+#------------------------------------------------------------------
+sub init () {
+   use Getopt::Std;
+   getopts('hf:irsu:', \%opts ) or die "Usage: $0 -h -f file -r -is -u user\n";
+   $opts{h} && help();
+}
+
+#------------------------------------------------------------------
+sub help() {
+   print STDERR << "EOF";
+
+$0 is a PERL implementation of 'last'
+
+usage: $0 [-h] [-f file] [-r] [-is] [-u user]
+
+ -h        : this (help) message
+ -f file   : use wtmpx 'file'
+ -r        : raw mode
+ -i        : include the inittab ID
+ -s        : include the session ID
+ -u user   : only return records for 'user'
+
+EOF
+   exit;
+}
+
+#------------------------------------------------------------------
+sub typeis ($) {
+    my $local_type = shift;
+    if ($local_type eq '0') {$local_type='EMPTY';}      #EMPTY
+    elsif ($local_type eq '1') {$local_type='RUNLV';}   #RUN_LVL
+    elsif ($local_type eq '2') {$local_type='BTIME';}   #BOOT_TIME
+    elsif ($local_type eq '3') {$local_type='OTIME';}   #OLD_TIME
+    elsif ($local_type eq '4') {$local_type='NTIME';}   #NEW_TIME
+    elsif ($local_type eq '5') {$local_type='IPROC';}   #INIT_PROCESS
+    elsif ($local_type eq '6') {$local_type='LPROC';}   #LOGIN_PROCESS
+    elsif ($local_type eq '7') {$local_type='LOGIN';}   #USER_PROCESS
+    elsif ($local_type eq '8') {$local_type='DEAD';}    #DEAD_PROCESS
+    elsif ($local_type eq '9') {$local_type='ACCNT';}   #ACCOUNTING
+    elsif ($local_type eq '10') {$local_type='DTIME';}  #DOWN_TIME
+    else {$local_type='WTF?';}
+    #else {die "$local_type type not known.";}
+}
+
+#------------------------------------------------------------------
+sub dayis ($) {
+    my $local_wday = shift;
+    if ($local_wday eq '0') {$local_wday='Sun';}
+    elsif ($local_wday eq '1') {$local_wday='Mon';}
+    elsif ($local_wday eq '2') {$local_wday='Tue';}
+    elsif ($local_wday eq '3') {$local_wday='Wed';}
+    elsif ($local_wday eq '4') {$local_wday='Thu';}
+    elsif ($local_wday eq '5') {$local_wday='Fri';}
+    elsif ($local_wday eq '6') {$local_wday='Sat';}
+    else {die "$local_wday day format not understood.";}
+}
+#------------------------------------------------------------------
+sub monthis ($) {
+    my $local_mon = shift;
+    if ($local_mon eq '0') {$local_mon='Jan';}
+    elsif ($local_mon eq '1') {$local_mon='Feb';}
+    elsif ($local_mon eq '2') {$local_mon='Mar';}
+    elsif ($local_mon eq '3') {$local_mon='Apr';}
+    elsif ($local_mon eq '4') {$local_mon='May';}
+    elsif ($local_mon eq '5') {$local_mon='Jun';}
+    elsif ($local_mon eq '6') {$local_mon='Jul';}
+    elsif ($local_mon eq '7') {$local_mon='Aug';}
+    elsif ($local_mon eq '8') {$local_mon='Sep';}
+    elsif ($local_mon eq '9') {$local_mon='Oct';}
+    elsif ($local_mon eq '10') {$local_mon='Nov';}
+    elsif ($local_mon eq '11') {$local_mon='Dec';}
+    else {die "$local_mon month format not understood.";}
+}
+
+#------------------------------------------------------------------
+sub header () {
+   if ($opts{i} && $opts{s}){
+      printf  ("%-9s %-5s %5s %-4s %8s %-12s %3s %6s %s %4s","USERNAME", "TYPE", "PID", "ID", "SESSION", "LINE", "DAY", "MTH DT YEAR", "HH:MM.ss\n");}
+   elsif($opts{i}){
+      printf  ("%-9s %-5s %5s %-4s %-12s %3s %6s %s %4s","USERNAME", "TYPE", "PID", "ID", "LINE", "DAY", "MTH DT YEAR", "HH:MM.ss\n");}
+   elsif($opts{s}){
+      printf  ("%-9s %-5s %5s %8s %-12s %3s %6s %s %4s","USERNAME", "TYPE", "PID", "SESSION", "LINE", "DAY", "MTH DT YEAR", "HH:MM.ss\n");}
+   else{
+      printf  ("%-9s %-5s %5s %-12s %3s %6s %s %4s","USERNAME", "TYPE", "PID", "LINE", "DAY", "MTH DT", "HH:MM.ss", "YEAR\n");}
+}
+
+# For when we fix the output and want our proper headers back
+#------------------------------------------------------------------
+#sub header () {
+#   if ($opts{i} && $opts{s}){
+#      printf  ("%-9s %-5s %5s %-4s %8s %-12s %3s %11s %s","USERNAME", "TYPE", "PID", "ID", "SESSION", "LINE", "DAY", "MTH DT YEAR", "HH:MM.ss\n");}
+#   elsif($opts{i}){
+#      printf  ("%-9s %-5s %5s %-4s %-12s %3s %11s %s","USERNAME", "TYPE", "PID", "ID", "LINE", "DAY", "MTH DT YEAR", "HH:MM.ss\n");}
+#   elsif($opts{s}){
+#      printf  ("%-9s %-5s %5s %8s %-12s %3s %11s %s","USERNAME", "TYPE", "PID", "SESSION", "LINE", "DAY", "MTH DT YEAR", "HH:MM.ss\n");}
+#   else{
+#      printf  ("%-9s %-5s %5s %-12s %3s %11s %s","USERNAME", "TYPE", "PID", "LINE", "DAY", "MTH DT YEAR", "HH:MM.ss\n");}
+#}
