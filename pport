@@ -80,7 +80,7 @@ sub win($$$$$$) {
    my ($success_colour,$host,$port,$timeout,$parsed_response,$raw_response) = @_;
    if ($debug) {
       binmode(STDOUT, ":utf8");
-      printf("%s, Success, TCP %d, %d sec%s, %s, %s\n",
+      printf("%s,Success,TCP %d,%d sec%s,%s,%s\n",
          $host,$port,$timeout,$timeout<=1?"":"s",$parsed_response,hex2ascii(hexprint($raw_response)));
    } else {
       if (-t STDOUT) {
