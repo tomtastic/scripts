@@ -11,115 +11,220 @@
 # 18/09/2013 - TRCM - Prelim IPv6 support, not so portable. draft HTTP parsing (v2.6.5)
 # 19/09/2013 - TRCM - Faster HTTP parsing, early exit on empty socket read (v2.7.1)
 # 25/09/2013 - TRCM - rejig layout
-my $version = "2.7.2";
-
+# 02/10/2013 - TRCM - take a list of hosts from a file. getopts.
+#                   - rejig layout++ (v2.8)
+# 07/10/2013 - TRCM - trim an input file as if CSV taking first column as host (v2.8.1)
+#                   - tally success and failure (v2.8.2)
+#                   - handle tabs in host list (v2.8.4)
+# 08/10/2013 - TRCM - play nicely when reading multiline stdin from a pipe (v2.9)
 #use IO::Socket::INET6;
 use IO::Socket::INET;
 use IO::Select;
+use File::Basename qw(basename);
+use Getopt::Long;
 
+my $version = "2.9";
+my $name = basename($0);
+my $success_colour = 32; # 31=red,32=green,33=yellow
+
+sub poke($$$);
+sub grok($);
+sub win($$$$$$);
+sub fail($$);
+sub gethostlist($);
 sub trim($);
+sub info($);
 sub wtf;
 sub hexprint($);
 sub hex2ascii($);
 
-my $remote_host = ( defined $ARGV[0] ) ? trim($ARGV[0]) : "";
-wtf() if $remote_host =~ /^(-h:--help|)$/;
-my $remote_port = ( defined $ARGV[1] ) ? $ARGV[1] : 22; # default to port 22
-my $timeout = ( defined $ARGV[2] ) ? $ARGV[2] : 3;      # default to 3 seconds
-my $debug = ( defined $ARGV[3] );                       # debug if debug
-my $socket_received;
-my $socket_parsed;
-my $colour_success = 32; # 31=red,32=green,33=yellow
-my $colour_fail = 31;
-my $socket_read_length = 128; # bytes
-my @fragments = ( 0 ); # Read just once from the socket
+wtf() unless @ARGV > 0 or (! -t STDIN);
+GetOptions  ('i|input=s' => \$fromfile,
+             'p|port=s' => \$port,
+             't|timeout=s' => \$timeout,
+             'd|debug' => \$debug,
+             's|sath' => \$sath,
+             'h|help|?' => sub{ info($version);wtf(); },
+) or wtf();
 
-#my $socket = IO::Socket::INET6->new(
-my $socket = IO::Socket::INET->new(
-   PeerAddr => $remote_host,
-   PeerPort => $remote_port,
-   Proto    => "tcp",
-   Type     => SOCK_STREAM,
-   Timeout  => $timeout
-) or do {
-   # We couldn't open a socket, let the user have the reason why from IO::Socket
-   if (-t STDOUT) {
-      printf("%s, \e[%dmFailure\e[m, TCP %d, %d secs, %s\n",$remote_host,$colour_fail,$remote_port,$timeout,$@);
-   } else {
-      printf("%s,Failure,TCP %d,%d secs,%s\n",$remote_host,$remote_port,$timeout,$@);
+my $single_host = ( defined $ARGV[0] ) ? trim($ARGV[0]) : "";
+my $port = ( defined $port ) ? $port : 22; # default to port 22
+my $timeout = ( defined $timeout ) ? $timeout : 3;              # default to 3 seconds
+# Flush to STDOUT as it happens, don't buffer.
+local $| = 1;
+my $hosts_successful = 0;
+
+# If we're being fed by a pipe, just suck it up and get on with it...
+if (! -t STDIN) {
+   # TODO just this, why did i try $single_host?
+   while (my $host = <>) {
+      chomp $host;
+      my $raw_response = poke($host,$port,$timeout) or fail($host,$@) and next;
+      if  (defined $raw_response) { $hosts_successful += 1; };
+      my $parsed_response = grok($raw_response);
+      win($success_colour,$host,$port,$timeout,$parsed_response,$raw_response);
    }
-   exit 1;
-};
-
-for ($remote_port) {
-   /4750|bl/  && do {
-                      # If we're checking the RSCD(4750/tcp) service, send some magic first
-                      # The clienthello string contents were experimentally found
-                      my $socket_send_rscdinit = "TLS";
-                      my $socket_send_rscdclienthello = pack( 'H*', '16030100490100004503015215ef8253b424768b3a19e6f8def4ebf0157db11d475b97c4d40b3e0af6c26e00001800390038003500160013000a00330032002f0007000500ff0100000400230000' );
-                      if ( () - IO::Select->new($socket)->can_write($timeout) ) {
-                         $socket->send($socket_send_rscdinit);
-                         $socket->send($socket_send_rscdclienthello);
-                         $socket_read_length = 256;
-                      }
-                   };
-   /80/    && do {
-                      # If we're checking the HTTP(80/tcp) service, fire a GET
-                      my $socket_send_httpsinit = "GET / HTTP/1.1\r\nhost: $remote_host\r\n\r\n";
-                      if ( () - IO::Select->new($socket)->can_write($timeout) ) {
-                         $socket->send($socket_send_httpsinit);
-                         $socket_read_length = 512;
-                         @fragments = ( 0,1,2,3,4,5,6,7 ); # Read several times from the socket, as response often fragmented
-                      }
-                   };
-}
-
-for my $frag (0 .. $#fragments) {
-   if ( defined() - IO::Select->new($socket)->can_read($timeout) ) {
-      $socket->recv($frag,$socket_read_length);
-      # Build up the response from however many fragments we read from the socket
-      $socket_received = $socket_received . $frag;
-   }
-   # If we read nothing from the socket on the last iteration, stop reading
-   last unless $frag;
-}
-close($socket);
-
-for ($socket_received) {
-   /^$/                        && do {$socket_parsed = "Nothing"; last;};
-   /^SSH-2.0-IPSSH-1.10.0/     && do {$socket_parsed = "looks like HPLO-100"; last;};
-   /^SSH-2.0-mpSSH_0.0.1/      && do {$socket_parsed = "looks like HPILOv1"; last;};
-   /^SSH-2.0-mpSSH_0.1.0/      && do {$socket_parsed = "looks like HPILOv2"; last;};
-   /^SSH-2.0-mpSSH_0.1.1/      && do {$socket_parsed = "looks like HPILOv2"; last;};
-   /^SSH-2.0-RomSShell_4.62/   && do {$socket_parsed = "looks like HPILOv3"; last;};
-   /^SSH-2.0-OpenSSH_OA/       && do {$socket_parsed = "looks like HP-OA"; last;};
-   # These are not specific enough.
-   #/^SSH-2.0-OpenSSH_5.0/      && do {$socket_parsed = "looks like Linux(XSCF)"; last;};
-   #/^SSH-2.0-OpenSSH_3.6.1p2/  && do {$socket_parsed = "looks like Linux(XSCF)"; last;};
-   /^SSH-2.0-Sun_SSH/          && do {$socket_parsed = "looks like Solaris"; last;};
-   # These are good for HTTP parsing
-   /Server: /                  && do {m/Server: (.+)/; $socket_parsed=$1; last;};
-   /title/                     && do {m/title>[\r\n]*(.+?)<\/title/sg; $socket_parsed=$1; last;};
-   # BladeLogic responses have this
-   /rscd/                      && do {$socket_parsed = "looks like BladeLogic RSCD"; last;};
-   # Failed to match, so set the output to be the raw response trimmed to just the first line
-   @socket_parsed=split /\n/,$socket_received;
-   $socket_parsed=$socket_parsed[0];
-}
-# portable chomp
-$socket_parsed =~ s/\015?\012?$//;
-if ($debug) {
-   binmode(STDOUT, ":utf8");
-   printf("%s, Success, TCP %d, %d secs, %s, %s\n",$remote_host,$remote_port,$timeout,$socket_parsed,hex2ascii(hexprint($socket_received)));
 } else {
-   if (-t STDOUT) {
-      printf("%s, \e[%dmSuccess\e[m, TCP %d, %d secs, %s\n",$remote_host,$colour_success,$remote_port,$timeout,$socket_parsed);
-   } else {
-      printf("%s,Success,TCP %d,%d secs,%s\n",$remote_host,$remote_port,$timeout,$socket_parsed);
+# Otherwise, work on the list from the command line...
+   my @hosts = ( defined $fromfile ) ? gethostlist($fromfile) : "$single_host";
+   foreach my $host (@hosts) {
+      my $raw_response = poke($host,$port,$timeout) or fail($host,$@) and next;
+      if  (defined $raw_response) { $hosts_successful += 1; };
+      my $parsed_response = grok($raw_response);
+      win($success_colour,$host,$port,$timeout,$parsed_response,$raw_response);
    }
 }
-exit 0;
+#------------------------------------------------------------------------------
+sub win($$$$$$) {
+   # Pretty print the great success
+   my ($success_colour,$host,$port,$timeout,$parsed_response,$raw_response) = @_;
+   if ($debug) {
+      binmode(STDOUT, ":utf8");
+      printf("%s, Success, TCP %d, %d sec%s, %s, %s\n",
+         $host,$port,$timeout,$timeout<=1?"":"s",$parsed_response,hex2ascii(hexprint($raw_response)));
+   } else {
+      if (-t STDOUT) {
+         printf("%s, \e[%dmSuccess\e[m, TCP %d, %d sec%s, %s\n",
+            $host,$success_colour,$port,$timeout,$timeout<=1?"":"s",$parsed_response);
+      } else {
+         printf("%s,Success,TCP %d,%d sec%s,%s\n",
+            $host,$port,$timeout,$timeout<=1?"":"s",$parsed_response);
+      }
+   }
+   if (-t STDOUT && defined $fromfile ) {
+      printf(" + \e[%dm%s\e[m out of %s successfully contacted\n",$success_colour,$hosts_successful,$hosts_found);
+   }
+}
 
+#------------------------------------------------------------------------------
+sub fail($$) {
+   # We couldn't open a socket, let the user have the reason why from IO::Socket
+   my $failhost = shift;
+   my $failcode = shift;
+   $failcode =~ s/IO::Socket::INET:\ //;
+   my $colour_fail = 31;
+   if (-t STDOUT) {
+      printf("%s, \e[%dmFailure\e[m, TCP %d, %d sec%s, %s\n",$failhost,$colour_fail,$port,$timeout,$timeout<=1?"":"s",$failcode);
+   } else {
+      printf("%s,Failure,TCP %d,%d sec%s,%s\n",$failhost,$port,$timeout,$timeout<=1?"":"s",$failcode);
+   }
+}
+
+#------------------------------------------------------------------------------
+sub gethostlist ($) {
+   my $filename = shift;
+   my @hosts;
+   if (-t STDOUT) {
+      print("\e[m");
+      print(" + Reading host list from file : $filename\n");
+   }
+   open(my $host_fh, '<', $filename) or die $!;
+   while (defined (my $line = <$host_fh>)) {
+      chomp $line;
+      # Handle comments or tabs trailing host
+      $line =~ s/\s*#.*$//;
+      $line =~ s/\s+$//;
+      # Handle blank lines
+      next if $line =~ /^$/;
+      # Handle CSV input as long as first field is host
+      $line =~ s/,.*$//;
+      push(@hosts,$line);
+   }
+   $hosts_found = $#hosts + 1;
+   if (-t STDOUT) {
+      print(" + Found $hosts_found hosts\n");
+   }
+   return @hosts;
+}
+
+#------------------------------------------------------------------------------
+sub poke($$$) {
+   # Open the socket to the host
+   my ($host, $port, $timeout) = @_;
+   my $response;
+   my $socket_read_length = 128; # bytes
+   my @fragments = ( 0 ); # Read just once from the socket
+   #my $socket = IO::Socket::INET6->new(
+   my $socket = IO::Socket::INET->new(
+      PeerAddr => $host,
+      PeerPort => $port,
+      Proto    => "tcp",
+      Type     => SOCK_STREAM,
+      Timeout  => $timeout
+   ) or return;
+
+   # Special poking for special ports
+   for ($port) {
+      # BladeLogic
+      /4750/  && do {
+                         # If we're checking the RSCD(4750/tcp) service, send some magic first
+                         # The clienthello string contents were experimentally found
+                         my $socket_send_rscdinit = "TLS";
+                         my $socket_send_rscdclienthello = pack( 'H*', '16030100490100004503015215ef8253b424768b3a19e6f8def4ebf0157db11d475b97c4d40b3e0af6c26e00001800390038003500160013000a00330032002f0007000500ff0100000400230000' );
+                         if ( () - IO::Select->new($socket)->can_write($timeout) ) {
+                            $socket->send($socket_send_rscdinit);
+                            $socket->send($socket_send_rscdclienthello);
+                            $socket_read_length = 256;
+                         }
+                      };
+      # HTTP
+      /80/    && do {
+                         # If we're checking the HTTP(80/tcp) service, fire a GET
+                         my $socket_send_httpsinit = "GET / HTTP/1.1\r\nhost: $host\r\n\r\n";
+                         if ( () - IO::Select->new($socket)->can_write($timeout) ) {
+                            $socket->send($socket_send_httpsinit);
+                            $socket_read_length = 512;
+                            @fragments = ( 0,1,2,3,4,5,6,7 ); # Read several times from the socket, as response often fragmented
+                         }
+                      };
+   }
+
+   # Listen to the response
+   for my $frag (0 .. $#fragments) {
+      if ( defined() - IO::Select->new($socket)->can_read($timeout) ) {
+         $socket->recv($frag,$socket_read_length);
+         # Build up the response from however many fragments we read from the socket
+         $response = $response . $frag;
+      }
+      # If we read nothing from the socket on the last iteration, stop reading
+      last unless $frag;
+   }
+   close($socket);
+   if ($response eq ""){ return "Nothing" };
+   return $response;
+}
+
+#------------------------------------------------------------------------------
+sub grok($) {
+   my $response = shift;
+   my $grok;
+   for ($response) {
+      /^Nothing$/                 && do {$grok = "Nothing"; last;};
+      /^SSH-2.0-Sun_SSH/          && do {$grok = "looks like Solaris"; last;};
+      /^SSH-2.0-RomSShell_4.62/   && do {$grok = "looks like HPILOv3"; last;};
+      /^SSH-2.0-mpSSH_0.1.1/      && do {$grok = "looks like HPILOv2"; last;};
+      /^SSH-2.0-mpSSH_0.1.0/      && do {$grok = "looks like HPILOv2"; last;};
+      /^SSH-2.0-mpSSH_0.0.1/      && do {$grok = "looks like HPILOv1"; last;};
+      /^SSH-2.0-OpenSSH_OA/       && do {$grok = "looks like HP-OA"; last;};
+      /^SSH-2.0-IPSSH-1.10.0/     && do {$grok = "looks like HPLO-100"; last;};
+      # These are not specific enough.
+      #/^SSH-2.0-OpenSSH_5.0/      && do {$grok = "looks like Linux(XSCF)"; last;};
+      #/^SSH-2.0-OpenSSH_3.6.1p2/  && do {$grok = "looks like Linux(XSCF)"; last;};
+      # These are good for HTTP parsing
+      /Server: /                  && do {m/Server: (.+)/; $grok=$1; last;};
+      /title/                     && do {m/title>[\r\n]*(.+?)<\/title/sg; $grok=$1; last;};
+      # BladeLogic responses have this
+      /rscd/                      && do {$grok = "looks like BladeLogic RSCD"; last;};
+      # Failed to match, so set the output to be the raw response trimmed to just the first line
+      @grok=split /\n/,$response;
+      $grok=$grok[0];
+   }
+   # portable chomp
+   $grok =~ s/\015?\012?$//;
+   return $grok;
+}
+
+#------------------------------------------------------------------------------
 sub trim($) {
    my $string = shift;
    $string =~ s/^\s+//;
@@ -127,6 +232,7 @@ sub trim($) {
    return $string;
 }
 
+#------------------------------------------------------------------------------
 sub hexprint($) {
     my ($string)=@_;
     my $hex="";
@@ -139,6 +245,7 @@ sub hexprint($) {
     return $hex;
 }
 
+#------------------------------------------------------------------------------
 sub hex2ascii($) {
    my ($hex)=@_;
    if ($hex =~ /:/) {
@@ -150,6 +257,14 @@ sub hex2ascii($) {
    return $string;
 }
 
+#------------------------------------------------------------------------------
+sub info($) {
+   printf("\e[%dm%s\e[m - %s\n",33,$name,@_);
+   return;
+}
+
+#------------------------------------------------------------------------------
 sub wtf {
-   die("Version:  $version\nUsage:  pport hostname [tcp_port] [timeout_secs] [debug]\n");
+   printf("Usage: %s -dhs [-i file] [-p tcp_port] [-t timeout_secs] hostname\n",$name);
+   exit;
 }
