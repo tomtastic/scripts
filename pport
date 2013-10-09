@@ -32,7 +32,7 @@ my $name = basename($0);
 
 # Flush to STDOUT as it happens, don't buffer.
 local $| = 1;
-my ($fromfile, $port, $timeout, $debug, $sath, $hosts_found, $single_host);
+my ($fromfile, $port, $timeout, $debug, $hosts_found, $single_host);
 my $hosts_successful = 0;
 
 wtf() unless @ARGV > 0 or (! -t STDIN);
@@ -40,7 +40,6 @@ GetOptions  ('i|input=s' => \$fromfile,
              'p|port=s' => \$port,
              't|timeout=s' => \$timeout,
              'd|debug' => \$debug,
-             's|sath' => \$sath,
              'vV|version' => sub{ info($VERSION);exit 0; },
              'h|help|?' => sub{ info($VERSION);wtf(); },
 ) or wtf();
