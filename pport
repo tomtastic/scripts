@@ -169,7 +169,7 @@ sub poke {
                          # The clienthello string contents were experimentally found
                          my $s_socket_send_rscdinit = "TLS";
                          my $s_socket_send_rscdclienthello = pack( 'H*', '16030100490100004503015215ef8253b424768b3a19e6f8def4ebf0157db11d475b97c4d40b3e0af6c26e00001800390038003500160013000a00330032002f0007000500ff0100000400230000' );
-                         if ( () - IO::Select->new($s_socket)->can_write($timeout) ) {
+                         if ( defined(IO::Select->new($s_socket)->can_write($timeout)) ) {
                             $s_socket->send($s_socket_send_rscdinit);
                             $s_socket->send($s_socket_send_rscdclienthello);
                             $s_socket_read_length = 256;
@@ -179,7 +179,7 @@ sub poke {
       /80/    && do {
                          # If we're checking the HTTP(80/tcp) service, fire a GET
                          my $s_socket_send_httpsinit = "GET / HTTP/1.1\r\nhost: $s_host\r\n\r\n";
-                         if ( () - IO::Select->new($s_socket)->can_write($timeout) ) {
+                         if ( defined(IO::Select->new($s_socket)->can_write($timeout)) ) {
                             $s_socket->send($s_socket_send_httpsinit);
                             $s_socket_read_length = 512;
                             @s_fragments = ( 0,1,2,3,4,5,6,7 ); # Read several times from the socket, as response often fragmented
