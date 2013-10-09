@@ -17,7 +17,8 @@
 #                   - tally success and failure (v2.8.2)
 #                   - handle tabs in host list (v2.8.4)
 # 08/10/2013 - TRCM - play nicely when reading multiline stdin from a pipe (v2.9)
-#                   - Heed some PerlCritic advice (v2.9.3)
+#                   - heed some PerlCritic advice (v2.94)
+#                   - uninitialised value bugs (v2.95)
 #use IO::Socket::INET6;
 use strict;
 use warnings;
@@ -26,13 +27,12 @@ use IO::Select;
 use File::Basename qw(basename);
 use Getopt::Long;
 
-our $VERSION = "2.9.3";
+our $VERSION = "2.95";
 my $name = basename($0);
 
 # Flush to STDOUT as it happens, don't buffer.
 local $| = 1;
-my ($fromfile, $port, $timeout, $debug, $sath, $hosts_found);
-my $single_host;
+my ($fromfile, $port, $timeout, $debug, $sath, $hosts_found, $single_host);
 my $hosts_successful = 0;
 
 wtf() unless @ARGV > 0 or (! -t STDIN);
@@ -40,19 +40,23 @@ GetOptions  ('i|input=s' => \$fromfile,
              'p|port=s' => \$port,
              't|timeout=s' => \$timeout,
              'd|debug' => \$debug,
+             's|sath' => \$sath,
+             'vV|version' => sub{ info($VERSION);exit 0; },
              'h|help|?' => sub{ info($VERSION);wtf(); },
 ) or wtf();
 
 $single_host = ( defined $ARGV[0] ) ? trim($ARGV[0]) : "";
-$port = ( defined $port ) ? $port : 22; # default to port 22
-$timeout = ( defined $timeout ) ? $timeout : 3;              # default to 3 seconds
+$port = ( defined $port ) ? $port : 22;          # default to port 22
+$timeout = ( defined $timeout ) ? $timeout : 3;  # default to 3 seconds
 
 # If we're being fed by a pipe, just suck it up and get on with it...
 if (! -t STDIN) {
    while (my $host = <>) {
       chomp $host;
-      # Check we've not been fed whitespace
-      wtf() unless $host =~ m/\S+/;
+      # Handle CSV input, but host must be the first field
+      $host =~ s/,.*$//;
+      # Skip this line unless we read some non-whitespace
+      next unless $host =~ m/\S+/;
       my $raw_response = poke($host) or fail($host,$@) and next;
       if  (defined $raw_response) { $hosts_successful += 1; };
       my $parsed_response = grok($raw_response);
@@ -60,14 +64,20 @@ if (! -t STDIN) {
    }
 } else {
 # Otherwise, work on the list from the command line...
-   # Check we've not been fed whitespace
-   wtf() unless $single_host =~ m/\S+/;
-   my @hosts = ( defined $fromfile ) ? gethostlist($fromfile) : "$single_host";
-   foreach my $host (@hosts) {
-      my $raw_response = poke($host) or fail($host,$@) and next;
-      if  (defined $raw_response) { $hosts_successful += 1; };
-      my $parsed_response = grok($raw_response);
-      win($host,$parsed_response,$raw_response);
+   # Check we've got something other than just whitespace
+   if ($single_host =~ m/\S+/ || defined $fromfile) {
+      my @hosts = ( defined $fromfile ) ? gethostlist($fromfile) : "$single_host";
+      foreach my $host (@hosts) {
+         my $raw_response = poke($host) or fail($host,$@) and next;
+         if  (defined $raw_response) { $hosts_successful += 1; };
+         my $parsed_response = grok($raw_response);
+         win($host,$parsed_response,$raw_response);
+      }
+      if (-t STDOUT && defined $fromfile ) {
+         printf(" + %s out of %s successfully contacted\n",$hosts_successful,$hosts_found);
+      }
+   } else {
+      wtf ();
    }
 }
 #------------------------------------------------------------------------------
@@ -87,10 +97,6 @@ sub win {
          printf("%s,Success,TCP %d,%d sec%s,%s\n",
             $s_host,$port,$timeout,$timeout<=1?"":"s",$s_parsed);
       }
-   }
-   if (-t STDOUT && defined $fromfile ) {
-      printf(" + \e[%dm%s\e[m out of %s successfully contacted\n",
-         $s_success_colour,$hosts_successful,$hosts_found);
    }
    return "ftw";
 }
@@ -184,7 +190,7 @@ sub poke {
 
    # Listen to the response
    for my $s_frag (0 .. $#s_fragments) {
-      if ( defined() - IO::Select->new($s_socket)->can_read($timeout) ) {
+      if ( defined(IO::Select->new($s_socket)->can_read($timeout)) ) {
          $s_socket->recv($s_frag,$s_socket_read_length);
          # Build up the response from however many fragments we read from the socket
          $s_response = $s_response . $s_frag;
@@ -193,7 +199,7 @@ sub poke {
       last unless $s_frag;
    }
    close($s_socket);
-   if ($s_response eq ""){ return "Nothing" };
+   if (! defined $s_response || $s_response eq "") { return "Nothing" };
    return $s_response;
 }
 
@@ -210,9 +216,6 @@ sub grok {
       /^SSH-2.0-mpSSH_0.0.1/      && do {$s_grok = "looks like HPILOv1"; last;};
       /^SSH-2.0-OpenSSH_OA/       && do {$s_grok = "looks like HP-OA"; last;};
       /^SSH-2.0-IPSSH-1.10.0/     && do {$s_grok = "looks like HPLO-100"; last;};
-      # These are not specific enough.
-      #/^SSH-2.0-OpenSSH_5.0/      && do {$grok = "looks like Linux(XSCF)"; last;};
-      #/^SSH-2.0-OpenSSH_3.6.1p2/  && do {$grok = "looks like Linux(XSCF)"; last;};
       # These are good for HTTP parsing
       /Server: /                  && do {m/Server: (.+)/; $s_grok=$1; last;};
       /title/                     && do {m/title>[\r\n]*(.+?)<\/title/sg; $s_grok=$1; last;};
