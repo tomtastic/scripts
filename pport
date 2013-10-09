@@ -216,8 +216,8 @@ sub grok {
       /^SSH-2.0-OpenSSH_OA/       && do {$s_grok = "looks like HP-OA"; last;};
       /^SSH-2.0-IPSSH-1.10.0/     && do {$s_grok = "looks like HPLO-100"; last;};
       # These are good for HTTP parsing
-      /Server: /                  && do {m/Server: (.+)/; $s_grok=$1; last;};
-      /title/                     && do {m/title>[\r\n]*(.+?)<\/title/sg; $s_grok=$1; last;};
+      /Server: /                  && do {m/Server: (.+)/; $s_grok=(defined $1)?$1:""; last;};
+      /title/                     && do {m/title>[\r\n]*(.+?)<\/title/sg; $s_grok=(defined $1)?$1:""; last;};
       # BladeLogic responses have this
       /rscd/                      && do {$s_grok = "looks like BladeLogic RSCD"; last;};
       # Failed to match, so set the output to be the raw response trimmed to just the first line
