@@ -31,8 +31,8 @@ if ($inputdir) {
 
 sub jfdi {
    my $inputfile = shift;
-   my $dir = ( defined $inputdir ) ? $inputdir : "";
-   my $dirfile = $dir . "/" . $inputfile;
+   my $dir = ( defined $inputdir ) ? $inputdir."/" : "";
+   my $dirfile = $dir . $inputfile;
    my %count_alphanum;
    my %count_special;
    open(my $fh, '<', $dirfile) or warn "$! : $dirfile\n";
@@ -49,7 +49,8 @@ sub jfdi {
             $count_special{$word}{word_count}++   if $word =~ m/[a-z]+/ &&
                                                      $word =~ m/[0-9]+/ &&
                                                      $word =~ m/[A-Z]+/ &&
-                                                     $word =~ m/[\Q[!"£$%^&*(){}\E]+/;
+                                                     # ▒ seems to not match?
+                                                     $word =~ m/[\Q[]:;@~,|`.?\/<>#'!-_+="\$&*%^(){}\E]+/;
          }
       }
    }
@@ -57,9 +58,9 @@ sub jfdi {
    my $num_alphanum = keys %count_alphanum;
    my $num_special = keys %count_special;
    if ( $num_alphanum == 0 && $num_special == 0 ) { return "No matches" };
-   printf("Words of %d chars in : %s\n", $lengthwant, $dirfile);
-   for my $word (sort keys %count_alphanum) { print "\e[33malphanum\e[m : $word\n"; }
-   for my $word (sort keys %count_special)  { print "\e[32m special\e[m : $word\n"; }
+   printf("%d words of %d chars in : %s\n", $num_alphanum+$num_special, $lengthwant, $dirfile);
+   for my $alnum (sort keys %count_alphanum) { print "\e[33malphanum\e[m : $alnum\n"; }
+   for my $special (sort keys %count_special)  { print "\e[32m special\e[m : $special\n"; }
    return "Done";
 }
 
