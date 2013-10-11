@@ -1,0 +1,71 @@
+#!/usr/bin/env perl
+# 10/10/2013 - TRCM - Find interesting words...
+#use strict;
+#use warnings;
+
+use Getopt::Long;
+use File::Basename qw(basename);
+
+our $VERSION = "1";
+my $name = basename($0);
+my $file;
+my $lengthwant = 8;
+
+GetOptions  ('i|input=s' => \$inputfile,
+             'd|dir=s' => \$inputdir,
+             'l|length=s' => \$lengthwant,
+             'vV|version' => sub{ info($VERSION);exit 0; },
+) or die(oops);
+
+#------------------------------------------------------------------------------
+if ($inputdir) {
+   opendir(my $dh, $inputdir) or die "$!\n";
+   while (defined($file = readdir($dh))) {
+       next if $file =~ /^\.\.?$/;
+       jfdi($file);
+   }
+   closedir($dh);
+} else {
+   jfdi($inputfile);
+}
+
+sub jfdi {
+   my $inputfile = shift;
+   my $dir = ( defined $inputdir ) ? $inputdir : "";
+   my $dirfile = $dir . "/" . $inputfile;
+   my %count_alphanum;
+   my %count_special;
+   open(my $fh, '<', $dirfile) or warn "$! : $dirfile\n";
+   while (defined (my $line = <$fh>)) {
+      chomp $line;
+      next if $line =~ /^$/;
+      foreach my $word (split /\s+/, $line) {
+         if (length($word) == $lengthwant) {
+            next if $word =~ /[[:^print:]]/;
+            $count_alphanum{$word}{word_count}++  if $word =~ m/^[a-zA-Z0-9]{$lengthwant}$/ &&
+                                                     $word =~ m/[0-9]+/ &&
+                                                     $word =~ m/[a-z]+/ &&
+                                                     $word =~ m/[A-Z]+/;
+            $count_special{$word}{word_count}++   if $word =~ m/[a-z]+/ &&
+                                                     $word =~ m/[0-9]+/ &&
+                                                     $word =~ m/[A-Z]+/ &&
+                                                     $word =~ m/[\Q[!"£$%^&*(){}\E]+/;
+         }
+      }
+   }
+   close $fh;
+   my $num_alphanum = keys %count_alphanum;
+   my $num_special = keys %count_special;
+   if ( $num_alphanum == 0 && $num_special == 0 ) { return "No matches" };
+   printf("Words of %d chars in : %s\n", $lengthwant, $dirfile);
+   for my $word (sort keys %count_alphanum) { print "\e[33malphanum\e[m : $word\n"; }
+   for my $word (sort keys %count_special)  { print "\e[32m special\e[m : $word\n"; }
+   return "Done";
+}
+
+#------------------------------------------------------------------------------
+sub info {
+   my $s_version = shift;
+   printf("\e[%dm%s\e[m - %s\n",33,$name,$s_version);
+   return;
+}
