@@ -1,0 +1,57 @@
+#!/usr/bin/env perl
+# Grok Solaris prtpicl for PCI devices, to replicate lspci functionality
+# 15/09/2011 - TRCM - Idea to use inline PCI ID dataset from Linux 'lspci'
+# 19/09/2011 - TRCM - use crufty file handles so we can work with 9 year old versions of PERL. ffs.
+# 14/10/2013 - TRCM - review and tidy
+#
+# Todo
+# - Read directly from prtpicl, avoid pre-processing with grep,sed,awk
+# - Better formatting, print the devfs-path before the device description
+# - I can haz moar error handling?
+# - not just pci but pciex must be groked
+# - Snarf the pci database automatically... 'cat /usr/share/misc/pci.ids >> sspci'
+
+use strict;
+use warnings;
+
+our $VERSION = '1.0';
+my $prtpicl = `which prtpicl 2>/dev/null`;
+chomp $prtpicl;
+my %pci = (
+    vendor => undef,
+    device => undef,
+    path   => undef,
+);
+
+# PCI
+open( my $PICL, "prtpicl -v | grep 'binding-name.\*pci[0-9a-f]\\{4\\},' | sed '{s/,/\ /;s/pci//;}' | awk '{print \$2, \$3}' |") || die "Failed: $!\n";
+# PCI-express
+#open (my $PICL, "prtpicl -v | grep 'binding-name.\*pciex[0-9a-f]\\{4\\},' | sed '{s/,/\ /;s/pciex//;}' | awk '{print \$2, \$3}' |")
+
+# Read each product,device pair from prtpicl output
+while (<$PICL>) {
+    chomp( my $line = $_ );    # FFFUUUUUUU. trailing cr's!
+    ( $pci{vendor}, $pci{device} ) = split( / /, $line, 2 );
+    $pci{vendor} = sprintf( "%04s", $pci{vendor} );    # zero left pad to four digits
+    $pci{device} = sprintf( "%04s", $pci{device} );    # zero left pad to four digits
+
+    # Parse our PCI ID list (at the end of this script)
+    seek DATA, 0, 0;                      # read from beginning on every search
+    while (<DATA>) {
+        chomp( my $vendor_data = $_ );
+        next unless /^$pci{vendor}/;
+        $vendor_data =~ s/^\S+\s+//;      # remove vendor ID (first word)
+        printf( "%s ", $vendor_data );
+        while (<DATA>) {
+            chomp( my $device_data = $_ );
+            next if /^#/;                 # ignore comments
+            if (/^\t$pci{device}/) {
+                $device_data =~ s/^\t\S+\s+//;    # remove device ID (first word after tab)
+                printf( "%s\n", $device_data );
+            }
+            last if /^\S/;    # if we reach a new vendor, we're done searching
+        }
+    }
+}
+close $PICL or die "unable to close: $!";
+__END__
