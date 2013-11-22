@@ -1,0 +1,98 @@
+#!/bin/bash
+# 15/10/2013 - TRCM - Initial
+#  5/11/2013 - TRCM - Fix it up
+# 11/11/2013 - TRCM - Add timestamps, exitcodes
+#                     exit0 = success
+#                     exit1 = discovery_failed
+#                     exit2 = no_update_required
+#                     exit3 = update_failed
+# 11/11/2013 - TRCM - Randomise the list of IP checker URLs to share the love a bit
+#                   - Calling with any argument adds verboseness
+#***************************
+# Usage : https://ipv4.tunnelbroker.net/ipv4_end.php?ip=IPV4ADDR&pass=MD5PASS&apikey=USERID&tid=TUNNELID
+# 
+# IPV4ADDR: Your IPv4 endpoint.
+#           Set to AUTO to determine your IP based on the IP you requested this page from.
+#           Previously passed as ipv4b.
+# MD5PASS : The MD5 hash of your password.
+# USERID  : The UserID shown on the main page of tunnelbroker.net when you log in.
+#           Previously referred to as user_id.
+# TUNNELID: The ID of the tunnel you're updating the endpoint on.
+#           This can be found on the tunnel information page.
+#           Previously referred to as the Global Tunnel ID / tunnel_id.
+
+# Edit these with your HE.net details and IP checker URLs...
+MD5PASS='4e1648072d4e30000000000000000'
+USERID='txxxxxxxxxxxxxxx.12345678'
+TUNNELID='123456'
+IPCHECKERS=('http://ipecho.net/plain' 'http://icanhazip.com' 'http://echoip.com')
+
+# Probably no need to edit below here ...
+CURL=/usr/bin/curl
+CURLOPTS='--ipv4 --max-time 10 --silent --show-error'
+LOGFILE=/tmp/$(basename $0).out
+URLAUTO="https://ipv4.tunnelbroker.net/ipv4_end.php?ip=AUTO&pass=$MD5PASS&apikey=$USERID&tid=$TUNNELID"
+URLMANUAL="https://ipv4.tunnelbroker.net/ipv4_end.php?ip=$WANIP&pass=$MD5PASS&apikey=$USERID&tid=$TUNNELID"
+WANAUTO="false"
+WANIPOLD=$(tail -1 $0 | sed 's/\t.*//')
+[ $1 ] && VERBOSE="true"
+
+# Randomise the IPCHECKERS array
+function checkarray
+{
+    for url in ${TEMPARRAY[@]}
+    do
+        [[ "$url" == "$1" ]] && return 0 # Exists in the randomised array
+    done
+    return 1 # Not found
+}
+TEMPARRAY=()
+while [ "${#TEMPARRAY[@]}" -ne "${#IPCHECKERS[@]}" ]
+do
+    RAND=$[ $RANDOM % ${#IPCHECKERS[@]} ]
+    checkarray "${IPCHECKERS[$RAND]}" || TEMPARRAY=(${TEMPARRAY[@]} "${IPCHECKERS[$RAND]}")
+done
+IPCHECKERS=("${TEMPARRAY[@]}")
+
+# Walk the randomised list and try to get our WAN IP
+try=0
+for ipchecker in "${IPCHECKERS[@]}"; do
+    try=$(($try+1))
+    WANIP=$($CURL $CURLOPTS $ipchecker)
+    WANIPLENGTH=$(echo $WANIP|wc -c)
+    if [ $WANIPLENGTH -lt 7 ] || [ $WANIPLENGTH -gt 16 ]; then
+        logger -s -t tunnelbroker "Discovery failed using \"$ipchecker\", attempt ($try/${#IPCHECKERS[@]})"
+        if [ $try -eq ${#IPCHECKERS[@]} ]; then
+            [ $VERBOSE ] && echo " ! Ran out of IP checkers to try"
+            exit 1
+        fi
+    else
+        [ $VERBOSE ] && echo " - Found our WAN IP $WANIP using \"$ipchecker\""
+        break
+    fi
+done
+
+# If we get this far, we need to tell HE.net our new IP
+if [ x"$WANIP" != x"$WANIPOLD" ]; then
+    logger -s -t tunnelbroker "IP update required from $WANIPOLD --> $WANIP"
+    if [ x$WANAUTO == x"true" ]; then
+        $CURL $CURLOPTS $URLAUTO >$LOGFILE 2>&1
+        [ $? -ne 0 ] && UPDATEFAIL=yes
+        [ x$UPDATEFAIL == x"yes" ] && [ $VERBOSE ] && echo " ! Updating HE.net with our new IP failed" && exit 3
+        [ x$UPDATEFAIL == x"yes" ] && exit 3
+        echo -e "${WANIP}\t# $(date '+%Y/%m/%d %T %Z')" >> $0
+    else
+        $CURL $CURLOPTS $URLMANUAL >$LOGFILE 2>&1
+        [ $? -ne 0 ] && UPDATEFAIL=yes
+        [ x$UPDATEFAIL == x"yes" ] && [ $VERBOSE ] && echo " ! Updating HE.net with our new IP failed" && exit 3
+        [ x$UPDATEFAIL == x"yes" ] && exit 3
+        echo -e "${WANIP}\t# $(date '+%Y/%m/%d %T %Z')" >> $0
+    fi
+else 
+    [ $VERBOSE ] && echo " - WAN IP $WANIP isn't new, exiting"
+    exit 2
+fi
+
+exit 0
+# Old IP history stored inline here, do not edit!
+127.0.0.1		# Force initial update
