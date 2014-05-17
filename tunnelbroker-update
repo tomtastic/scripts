@@ -8,6 +8,7 @@
 #                     exit3 = update_failed
 # 11/11/2013 - TRCM - Randomise the list of IP checker URLs to share the love a bit
 #                   - Calling with any argument adds verboseness
+# 17/05/2014 - TRCM - Additional IP check URLs and IP extraction regex
 #***************************
 # Usage : https://ipv4.tunnelbroker.net/ipv4_end.php?ip=IPV4ADDR&pass=MD5PASS&apikey=USERID&tid=TUNNELID
 # 
@@ -25,11 +26,12 @@
 MD5PASS='4e1648072d4e30000000000000000'
 USERID='txxxxxxxxxxxxxxx.12345678'
 TUNNELID='123456'
-IPCHECKERS=('http://ipecho.net/plain' 'http://icanhazip.com' 'http://echoip.com')
+IPCHECKERS=('http://www.whatsmyip.us/' 'http://www.ipchicken.com/' 'http://whatsmyip.net/' 'http://ipecho.net/plain' 'http://icanhazip.com' 'http://echoip.com')
 
 # Probably no need to edit below here ...
-CURL=/usr/bin/curl
+CURL=$(which curl)
 CURLOPTS='--ipv4 --max-time 10 --silent --show-error'
+GREP=$(which egrep)
 LOGFILE=/tmp/$(basename $0).out
 URLAUTO="https://ipv4.tunnelbroker.net/ipv4_end.php?ip=AUTO&pass=$MD5PASS&apikey=$USERID&tid=$TUNNELID"
 URLMANUAL="https://ipv4.tunnelbroker.net/ipv4_end.php?ip=$WANIP&pass=$MD5PASS&apikey=$USERID&tid=$TUNNELID"
@@ -58,7 +60,7 @@ IPCHECKERS=("${TEMPARRAY[@]}")
 try=0
 for ipchecker in "${IPCHECKERS[@]}"; do
     try=$(($try+1))
-    WANIP=$($CURL $CURLOPTS $ipchecker)
+    WANIP=$($CURL $CURLOPTS $ipchecker | $GREP -m1 -o '([[:digit:]]{1,3}\.){3}[[:digit:]]{1,3}')
     WANIPLENGTH=$(echo $WANIP|wc -c)
     if [ $WANIPLENGTH -lt 7 ] || [ $WANIPLENGTH -gt 16 ]; then
         logger -s -t tunnelbroker "Discovery failed using \"$ipchecker\", attempt ($try/${#IPCHECKERS[@]})"
