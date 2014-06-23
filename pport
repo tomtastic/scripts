@@ -1,25 +1,14 @@
 #!/usr/bin/env perl
-# 02/07/2013 - TRCM - cleanup (v0.1)
-#                   - overengineer++ (v0.5)
-# 22/08/2013 - TRCM - grok BladeLogic port 4750 (v0.999)
-# 03/09/2013 - TRCM - fix errors from warnings and strict
-#                   - don't write to socket unless we can
-#                   - portable chomp for dos/win style responses
-#                   - add debug mode to view response data (v1.1)
-# 05/09/2013 - TRCM - jiggle output, and early exit on socket data parsing (v2)
-#                   - colour bitches! (v2.5)
-# 18/09/2013 - TRCM - Prelim IPv6 support, not so portable. draft HTTP parsing (v2.6.5)
-# 19/09/2013 - TRCM - Faster HTTP parsing, early exit on empty socket read (v2.7.1)
-# 25/09/2013 - TRCM - rejig layout
-# 02/10/2013 - TRCM - take a list of hosts from a file. getopts.
-#                   - rejig layout++ (v2.8)
-# 07/10/2013 - TRCM - trim an input file as if CSV taking first column as host (v2.8.1)
-#                   - tally success and failure (v2.8.2)
-#                   - handle tabs in host list (v2.8.4)
 # 08/10/2013 - TRCM - play nicely when reading multiline stdin from a pipe (v2.9)
 #                   - heed some PerlCritic advice (v2.94)
 #                   - uninitialised value bugs (v2.95)
-#use IO::Socket::INET6;
+# 12/02/2014 - TRCM - fix error codes on bad hostnames
+# 02/05/2014 - TRCM - fix host parsing when fed from loop (eg. not stdin)
+# 23/06/2014 - TRCM - add option for IPv6 (v3.1)
+#
+# TODO: Add a brief mode, printing more tersely with  just 'success/fail'
+# TODO: Can we get any more details from the BladeLogic packets?
+
 use strict;
 use warnings;
 use IO::Socket::INET;
@@ -27,12 +16,12 @@ use IO::Select;
 use File::Basename qw(basename);
 use Getopt::Long;
 
-our $VERSION = "2.95";
+our $VERSION = "3.1";
 my $name = basename($0);
 
 # Flush to STDOUT as it happens, don't buffer.
 local $| = 1;
-my ($fromfile, $port, $timeout, $debug, $hosts_found, $single_host);
+my ($fromfile, $port, $timeout, $debug, $ipv6, $hosts_found, $single_host);
 my $hosts_successful = 0;
 
 wtf() unless @ARGV > 0 or (! -t STDIN);
@@ -40,16 +29,17 @@ GetOptions  ('i|input=s' => \$fromfile,
              'p|port=s' => \$port,
              't|timeout=s' => \$timeout,
              'd|debug' => \$debug,
+             '6|ipv6' => \$ipv6,
              'vV|version' => sub{ info($VERSION);exit 0; },
              'h|help|?' => sub{ info($VERSION);wtf(); },
 ) or wtf();
-
+if ($ipv6 && ($^V lt 'v5.14.0')) { die "IPv6 support from IO::Socket requires PERL >= v5.14\n" };
 $single_host = ( defined $ARGV[0] ) ? trim($ARGV[0]) : "";
 $port = ( defined $port ) ? $port : 22;          # default to port 22
 $timeout = ( defined $timeout ) ? $timeout : 3;  # default to 3 seconds
 
 # If we're being fed by a pipe, just suck it up and get on with it...
-if (! -t STDIN) {
+if (! -t STDIN && $single_host eq "") {
    while (my $host = <>) {
       chomp $host;
       # Handle CSV input, but host must be the first field
@@ -64,8 +54,13 @@ if (! -t STDIN) {
 } else {
 # Otherwise, work on the list from the command line...
    # Check we've got something other than just whitespace
-   if ($single_host =~ m/\S+/ || defined $fromfile) {
-      my @hosts = ( defined $fromfile ) ? gethostlist($fromfile) : "$single_host";
+   if ($single_host =~ m/\S+/) {
+      my $raw_response = poke($single_host) or fail($single_host,$@) and exit 1;
+      if  (defined $raw_response) { $hosts_successful += 1; };
+      my $parsed_response = grok($raw_response);
+      win($single_host,$parsed_response,$raw_response);
+   } elsif (defined $fromfile) {
+      my @hosts = gethostlist($fromfile);
       foreach my $host (@hosts) {
          my $raw_response = poke($host) or fail($host,$@) and next;
          if  (defined $raw_response) { $hosts_successful += 1; };
@@ -97,7 +92,7 @@ sub win {
             $s_host,$port,$timeout,$timeout<=1?"":"s",$s_parsed);
       }
    }
-   return "ftw";
+   return 0;
 }
 
 #------------------------------------------------------------------------------
@@ -114,7 +109,7 @@ sub fail {
       printf("%s,Failure,TCP %d,%d sec%s,%s\n",
          $s_failhost,$port,$timeout,$timeout<=1?"":"s",$s_failcode);
    }
-   return "epic";
+   return 1;
 }
 
 #------------------------------------------------------------------------------
@@ -130,8 +125,10 @@ sub gethostlist {
       chomp $s_line;
       # Handle blank lines
       next if $s_line =~ /^$/;
+      next if $s_line =~ /^#.*$/;
       # Handle comments or whitespace trailing host
       $s_line =~ s/\s*#.*$//;
+      $s_line =~ s/^#$//;
       $s_line =~ s/\s+$//;
       # Handle CSV input, but host must be the first field
       $s_line =~ s/,.*$//;
@@ -152,7 +149,6 @@ sub poke {
    my $s_response;
    my $s_socket_read_length = 128; # bytes
    my @s_fragments = ( 0 ); # Read just once from the socket
-   #my $socket = IO::Socket::INET6->new(
    my $s_socket = IO::Socket::INET->new(
       PeerAddr => $s_host,
       PeerPort => $port,
@@ -265,12 +261,13 @@ sub hex2ascii {
 #------------------------------------------------------------------------------
 sub info {
    my $s_version = shift;
-   printf("\e[%dm%s\e[m - %s\n",33,$name,$s_version);
+   printf("\e[%dm%s\e[m - %s  (PERL v%vd)\n",33,$name,$s_version,$^V);
    return;
 }
 
 #------------------------------------------------------------------------------
 sub wtf {
-   printf("Usage: %s -dhs [-i file] [-p tcp_port] [-t timeout_secs] hostname\n",$name);
+   printf("Usage: %s -dhs6 [-i file] [-p tcp_port] [-t timeout_secs] hostname\n",$name);
    exit;
 }
+
