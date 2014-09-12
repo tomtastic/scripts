@@ -2,9 +2,11 @@
 # 08/10/2013 - TRCM - play nicely when reading multiline stdin from a pipe (v2.9)
 #                   - heed some PerlCritic advice (v2.94)
 #                   - uninitialised value bugs (v2.95)
+# 07/01/2014 - TRCM - (DB) query dbSquared for SATHS
 # 12/02/2014 - TRCM - fix error codes on bad hostnames
 # 02/05/2014 - TRCM - fix host parsing when fed from loop (eg. not stdin)
 # 23/06/2014 - TRCM - add option for IPv6 (v3.1)
+# 28/08/2014 - TRCM - add timings (v3.2)
 #
 # TODO: Add a brief mode, printing more tersely with  just 'success/fail'
 # TODO: Can we get any more details from the BladeLogic packets?
@@ -15,8 +17,9 @@ use IO::Socket::INET;
 use IO::Select;
 use File::Basename qw(basename);
 use Getopt::Long;
+use Time::HiRes qw(time);
 
-our $VERSION = "3.1";
+our $VERSION = "3.2";
 my $name = basename($0);
 
 # Flush to STDOUT as it happens, don't buffer.
@@ -43,32 +46,49 @@ if (! -t STDIN && $single_host eq "") {
    while (my $host = <>) {
       chomp $host;
       # Handle CSV input, but host must be the first field
-      $host =~ s/,.*$//;
+      $host =~ s/[,;].*$//;
       # Skip this line unless we read some non-whitespace
       next unless $host =~ m/\S+/;
-      my $raw_response = poke($host) or fail($host,$@) and next;
-      if  (defined $raw_response) { $hosts_successful += 1; };
-      my $parsed_response = grok($raw_response);
-      win($host,$parsed_response,$raw_response);
+      my ($pokeok,$elapsed,$raw_response) = poke($host);
+      if ($pokeok == 0) {
+         #if  (defined $raw_response) { $hosts_successful += 1; };
+         $hosts_successful += 1;
+         my $parsed_response = grok($raw_response);
+         win($host,$elapsed,$parsed_response,$raw_response);
+      } else {
+         fail($host,$elapsed,$raw_response) and next;
+      }
    }
 } else {
 # Otherwise, work on the list from the command line...
    # Check we've got something other than just whitespace
    if ($single_host =~ m/\S+/) {
-      my $raw_response = poke($single_host) or fail($single_host,$@) and exit 1;
-      if  (defined $raw_response) { $hosts_successful += 1; };
-      my $parsed_response = grok($raw_response);
-      win($single_host,$parsed_response,$raw_response);
-   } elsif (defined $fromfile) {
-      my @hosts = gethostlist($fromfile);
-      foreach my $host (@hosts) {
-         my $raw_response = poke($host) or fail($host,$@) and next;
+      my ($pokeok,$elapsed,$raw_response) = poke($single_host);
+      if ($pokeok == 0) {
          if  (defined $raw_response) { $hosts_successful += 1; };
          my $parsed_response = grok($raw_response);
-         win($host,$parsed_response,$raw_response);
+         win($single_host,$elapsed,$parsed_response,$raw_response);
+      } else {
+         fail($single_host,$elapsed,$raw_response) and exit 1;
+      }
+   } elsif (defined $fromfile) {
+      my @hosts = gethostlist($fromfile);
+      my $total_elapsed;
+      foreach my $host (@hosts) {
+         my ($pokeok,$elapsed,$raw_response) = poke($host);
+         if ($pokeok == 0) {
+            #if  (defined $raw_response) { $hosts_successful += 1; };
+            $hosts_successful += 1;
+            my $parsed_response = grok($raw_response);
+            $total_elapsed += $elapsed;
+            win($host,$elapsed,$parsed_response,$raw_response);
+         } else {
+            $total_elapsed += $elapsed;
+            fail($host,$elapsed,$raw_response) and next;
+         }
       }
       if (-t STDOUT && defined $fromfile ) {
-         printf(" + %s out of %s successfully contacted\n",$hosts_successful,$hosts_found);
+         printf(" + %s out of %s successfully contacted taking %.1f seconds\n",$hosts_successful,$hosts_found,$total_elapsed);
       }
    } else {
       wtf ();
@@ -78,18 +98,18 @@ if (! -t STDIN && $single_host eq "") {
 sub win {
    # Pretty print the great success
    my $s_success_colour = '32'; # 31=red,32=green,33=yellow
-   my ($s_host,$s_parsed,$s_raw) = @_;
+   my ($s_host,$s_elapsed,$s_parsed,$s_raw) = @_;
    if ($debug) {
       binmode(STDOUT, ':encoding(UTF-8)');
-      printf("%s, \e[%dmSuccess\e[m, TCP %d, %d sec%s, %s, %s\n",
-         $s_host,$s_success_colour,$port,$timeout,$timeout<=1?"":"s",$s_parsed,hex2ascii(hexprint($s_raw)));
+      printf("%s, \e[%dmSuccess\e[m, TCP %d, %.1g sec%s, %s, %s\n",
+         $s_host,$s_success_colour,$port,$s_elapsed,$timeout<=1?"":"s",$s_parsed,hex2ascii(hexprint($s_raw)));
    } else {
       if (-t STDOUT) {
-         printf("%s, \e[%dmSuccess\e[m, TCP %d, %d sec%s, %s\n",
-            $s_host,$s_success_colour,$port,$timeout,$timeout<=1?"":"s",$s_parsed);
+         printf("%s, \e[%dmSuccess\e[m, TCP %d, %.1g sec%s, %s\n",
+            $s_host,$s_success_colour,$port,$s_elapsed,$timeout<=1?"":"s",$s_parsed);
       } else {
-         printf("%s,Success,TCP %d,%d sec%s,%s\n",
-            $s_host,$port,$timeout,$timeout<=1?"":"s",$s_parsed);
+         printf("%s,Success,TCP %d,%.1g sec%s,%s\n",
+            $s_host,$port,$s_elapsed,$timeout<=1?"":"s",$s_parsed);
       }
    }
    return 0;
@@ -99,15 +119,14 @@ sub win {
 sub fail {
    # We couldn't open a socket, let the user have the reason why from IO::Socket
    my $s_fail_colour = '31'; # 31=red,32=green,33=yellow
-   my $s_failhost = shift;
-   my $s_failcode = shift;
+   my ($s_failhost,$s_elapsed,$s_failcode) = @_;
    $s_failcode =~ s/IO::Socket::INET:\ //;
    if (-t STDOUT) {
-      printf("%s, \e[%dmFailure\e[m, TCP %d, %d sec%s, %s\n",
-         $s_failhost,$s_fail_colour,$port,$timeout,$timeout<=1?"":"s",$s_failcode);
+      printf("%s, \e[%dmFailure\e[m, TCP %d, %.1g sec%s, %s\n",
+         $s_failhost,$s_fail_colour,$port,$s_elapsed,$timeout<=1?"":"s",$s_failcode);
    } else {
-      printf("%s,Failure,TCP %d,%d sec%s,%s\n",
-         $s_failhost,$port,$timeout,$timeout<=1?"":"s",$s_failcode);
+      printf("%s,Failure,TCP %d,%.1g sec%s,%s\n",
+         $s_failhost,$port,$s_elapsed,$timeout<=1?"":"s",$s_failcode);
    }
    return 1;
 }
@@ -131,7 +150,7 @@ sub gethostlist {
       $s_line =~ s/^#$//;
       $s_line =~ s/\s+$//;
       # Handle CSV input, but host must be the first field
-      $s_line =~ s/,.*$//;
+      $s_line =~ s/[,;].*$//;
       push(@s_hosts,$s_line);
    }
    close $s_host_fh;
@@ -145,6 +164,8 @@ sub gethostlist {
 #------------------------------------------------------------------------------
 sub poke {
    # Open the socket to the host
+   # Returns (1,elapsed_time,error_message) for failure, or (0,elapsed_time,result_message) for success
+   my $s_start = time;
    my $s_host = shift;
    my $s_response;
    my $s_socket_read_length = 128; # bytes
@@ -155,7 +176,7 @@ sub poke {
       Proto    => "tcp",
       Type     => SOCK_STREAM,
       Timeout  => $timeout
-   ) or return;
+   ) or return (1,time-$s_start,$@);
 
    # Special poking for special ports
    for ($port) {
@@ -194,8 +215,8 @@ sub poke {
       last unless $s_frag;
    }
    close($s_socket);
-   if (! defined $s_response || $s_response eq "") { return "Nothing" };
-   return $s_response;
+   if (! defined $s_response || $s_response eq "") { return (0,time-$s_start,"Nothing") };
+   return (0,time-$s_start,$s_response);
 }
 
 #------------------------------------------------------------------------------
@@ -216,6 +237,8 @@ sub grok {
       /title/                     && do {m/title>[\r\n]*(.+?)<\/title/sg; $s_grok=(defined $1)?$1:""; last;};
       # BladeLogic responses have this
       /rscd/                      && do {$s_grok = "looks like BladeLogic RSCD"; last;};
+      # VMware ESXi
+      /^SSH-2.0-dropbear_0.52/    && do {$s_grok = "looks like VMWARE ESXi (try TCP port 902)"; last;};
       # Failed to match, so set the output to be the raw response trimmed to just the first line
       my @s_grok=split /\n/,$s_response;
       $s_grok=$s_grok[0];
@@ -253,8 +276,10 @@ sub hex2ascii {
       $s_hex =~ s/[: ]//g;
    }
    my $s_string = join("",pack("H*",$s_hex) =~ m/(.)/g);
+   # Don't print the unprintable
+   $s_string =~ s/[^\x20-\x7E]//; # Strip non-core ASCII printable characters
    # Print the unprintable as unicode
-   $s_string =~ tr[\0-\x1F\x7F] [\x{2400}-\x{241F}\x{2421}];
+   #$s_string =~ tr[\0-\x1F\x7F] [\x{2400}-\x{241F}\x{2421}];
    return $s_string;
 }
 
@@ -270,4 +295,3 @@ sub wtf {
    printf("Usage: %s -dhs6 [-i file] [-p tcp_port] [-t timeout_secs] hostname\n",$name);
    exit;
 }
-
