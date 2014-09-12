@@ -1,12 +1,15 @@
 #!/usr/bin/env perl
 # 10/10/2013 - TRCM - Find interesting words...
+# 06/08/2014 - TRCM - Use regex lookaheads!
+# 11/08/2014 - TRCM - Handle non-ASCII chars, like pound,£'C2:A3'
 #use strict;
 #use warnings;
 
 use Getopt::Long;
 use File::Basename qw(basename);
+use Benchmark qw(cmpthese);
 
-our $VERSION = "1";
+our $VERSION = "1.3";
 my $name = basename($0);
 my $file;
 my $lengthwant = 8;
@@ -39,26 +42,19 @@ sub jfdi {
    while (defined (my $line = <$fh>)) {
       chomp $line;
       next if $line =~ /^$/;
-      foreach my $word (split /\s+/, $line) {
-         if (length($word) == $lengthwant) {
-            next if $word =~ /[[:^print:]]/;
-            $count_alphanum{$word}{word_count}++  if $word =~ m/^[a-zA-Z0-9]{$lengthwant}$/ &&
-                                                     $word =~ m/[0-9]+/ &&
-                                                     $word =~ m/[a-z]+/ &&
-                                                     $word =~ m/[A-Z]+/;
-            $count_special{$word}{word_count}++   if $word =~ m/[a-z]+/ &&
-                                                     $word =~ m/[0-9]+/ &&
-                                                     $word =~ m/[A-Z]+/ &&
-                                                     # ▒ seems to not match?
-                                                     $word =~ m/[\Q[]:;@~,|`.?\/<>#'!-_+="\$&*%^(){}\E]+/;
-         }
+      foreach my $word (split /[\s+,]/, $line) {
+         next if (length($word) != $lengthwant);
+         $count_alphanum{$word}{word_count}++ if $word =~
+             m/^(?!.*?[\Q[]:;@~,|`.?\/<>#'!-_+="\$&*%^(){}\E(?:\xC2\xA3)])(?=.*?[a-z])(?=.*?[A-Z])(?=.*?\d)/;
+         $count_special{$word}{word_count}++  if $word =~
+             m/^(?=.*?[a-z])(?=.*?[A-Z])(?=.*?\d)(?=.*?[\Q[]:;@~,|`.?\/<>#'!-_+="\$&*%^(){}\E(?:\xC2\xA3)])/;
       }
    }
    close $fh;
    my $num_alphanum = keys %count_alphanum;
    my $num_special = keys %count_special;
    if ( $num_alphanum == 0 && $num_special == 0 ) { return "No matches" };
-   printf("%d words of %d chars in : %s\n", $num_alphanum+$num_special, $lengthwant, $dirfile);
+   printf("%d interesting words of %d chars in : %s\n", $num_alphanum+$num_special, $lengthwant, $dirfile);
    for my $alnum (sort keys %count_alphanum) { print "\e[33malphanum\e[m : $alnum\n"; }
    for my $special (sort keys %count_special)  { print "\e[32m special\e[m : $special\n"; }
    return "Done";
