@@ -1,3 +1,66 @@
+#!/usr/bin/env perl
+# Check keys in authorized_keys files allowing access without a password
+# checksum each key found so we can easily compare and identify duplicate keys
+# 10/01/2011 - TRCM - original bash version (saved at the end for posterity)
+# 11/09/2015 - TRCM - migrated to PERL so we can grok info from the key itself
+#
+use MIME::Base64;
+use Digest::MD5 qw(md5_hex);
+
+sub grok_pubkey($) {
+   # Takes a base64 encoded SSH public key and returns a hash of values
+   my $bytes = decode_base64(shift);
+   my $offset=0;
+   my %grok = (
+       fingerprint => undef,
+       typelen  => undef,   # 4 byte field length      # eg. 7
+       type     => undef,   # key type (ASCII encoded) # eg. "ssh-dss"
+       explen   => undef,   # 4 byte field length      # eg. 3
+       expbits  => undef,   # convert to bits
+       expo     => undef,   # public exponent          # eg. 65537
+       modlen   => undef,   # 4 byte field length      # eg. our key length (1024 / 2048 / etc)
+       modbits  => undef,   # convert to bits
+       mod      => undef
+   );
+   $grok{fingerprint} = join ':', (unpack '(A2)*', md5_hex($bytes));
+   $grok{typelen} = unpack "I", substr($bytes,$offset,4);                  $offset += 4;
+   $grok{type} = unpack "A*", substr($bytes,$offset,$grok{typelen});       $offset += $grok{typelen};
+   if ($grok{type} =~ m/rsa/) {
+      # RSA format has exponent then modulus
+      $grok{explen} = unpack("I", substr($bytes,$offset,4));            $offset += 4;
+      $grok{expbits} = ($grok{explen})*8;
+      $grok{expo} = unpack "A", substr($bytes,$offset,$grok{explen}); $offset += $grok{explen};
+      $grok{modlen} = unpack("I", substr($bytes,$offset,4));               $offset += 4;
+      $grok{modbits} = ($grok{modlen}-1)*8; # modulus gets padded with zero, so subtract one.
+      $grok{mod} = unpack "A", substr($bytes,$offset,$grok{modlen});
+   } else {
+      # DSS format has modulus then exponent
+      $grok{modlen} = unpack("I", substr($bytes,$offset,4));               $offset += 4;
+      $grok{modbits} = ($grok{modlen}-1)*8; # modulus gets padded with zero, so subtract one.
+      $grok{mod} = unpack "A", substr($bytes,$offset,$grok{modlen});       $offset += $grok{modlen};
+      $grok{explen} = unpack("I", substr($bytes,$offset,4));            $offset += 4;
+      $grok{expbits} = ($grok{explen}-1)*8;
+      $grok{expo} = unpack "A", substr($bytes,$offset,$grok{explen});
+   }
+   return %grok;
+}
+
+my $debug = $ARGV[1] ? defined($ARGV[1]) : undef;
+my $authkeyfile = $ARGV[0];
+open (my $fh, '<', $authkeyfile) or die "$!\n";
+while (defined (my $line = <$fh>)) {
+   chomp($line);
+   # FIXME : need better regex to select the base64 string
+   # my ($options,$base64,$comment) =~ m/^(blah)\s+\w+?\s+(.+?)$/
+   my $base64 = [split (/\s+/,$line)]->[1];
+   my $comment = [split (/\s+/,$line)]->[2];
+   my %decoded = grok_pubkey($base64);
+   printf "Type         Size(bits) Fingerprint                                     Comment\n" if ($. eq 1);
+   printf "%-12s %-10s %-18s %s\n",$decoded{type},$decoded{modbits},$decoded{fingerprint},$comment;
+}
+close $fh;
+
+__END__
 #!/bin/bash
 #
 # Check keys in authorized_keys files allowing access without a password
