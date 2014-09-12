@@ -1,9 +1,8 @@
 #!/usr/bin/env perl
 # Check keys in authorized_keys files allowing access without a password
 # checksum each key found so we can easily compare and identify duplicate keys
-# 10/01/2011 - TRCM - original bash version (saved at the end for posterity)
-# 11/09/2015 - TRCM - migrated to PERL so we can grok info from the key itself
-#
+# 10/01/2011 - TRCM - original bash version
+# 11/09/2015 - TRCM - migrated to PERL so we can grok info from the public SSH key itself
 use MIME::Base64;
 use Digest::MD5 qw(md5_hex);
 
@@ -23,29 +22,28 @@ sub grok_pubkey($) {
        mod      => undef
    );
    $grok{fingerprint} = join ':', (unpack '(A2)*', md5_hex($bytes));
-   $grok{typelen} = unpack "I", substr($bytes,$offset,4);                  $offset += 4;
+   $grok{typelen} = unpack "N", substr($bytes,$offset,4);                  $offset += 4;
    $grok{type} = unpack "A*", substr($bytes,$offset,$grok{typelen});       $offset += $grok{typelen};
    if ($grok{type} =~ m/rsa/) {
       # RSA format has exponent then modulus
-      $grok{explen} = unpack("I", substr($bytes,$offset,4));            $offset += 4;
+      $grok{explen} = unpack("N", substr($bytes,$offset,4));            $offset += 4;
       $grok{expbits} = ($grok{explen})*8;
       $grok{expo} = unpack "A", substr($bytes,$offset,$grok{explen}); $offset += $grok{explen};
-      $grok{modlen} = unpack("I", substr($bytes,$offset,4));               $offset += 4;
+      $grok{modlen} = unpack("N", substr($bytes,$offset,4));               $offset += 4;
       $grok{modbits} = ($grok{modlen}-1)*8; # modulus gets padded with zero, so subtract one.
       $grok{mod} = unpack "A", substr($bytes,$offset,$grok{modlen});
    } else {
       # DSS format has modulus then exponent
-      $grok{modlen} = unpack("I", substr($bytes,$offset,4));               $offset += 4;
+      $grok{modlen} = unpack("N", substr($bytes,$offset,4));               $offset += 4;
       $grok{modbits} = ($grok{modlen}-1)*8; # modulus gets padded with zero, so subtract one.
       $grok{mod} = unpack "A", substr($bytes,$offset,$grok{modlen});       $offset += $grok{modlen};
-      $grok{explen} = unpack("I", substr($bytes,$offset,4));            $offset += 4;
+      $grok{explen} = unpack("N", substr($bytes,$offset,4));            $offset += 4;
       $grok{expbits} = ($grok{explen}-1)*8;
       $grok{expo} = unpack "A", substr($bytes,$offset,$grok{explen});
    }
    return %grok;
 }
 
-my $debug = $ARGV[1] ? defined($ARGV[1]) : undef;
 my $authkeyfile = $ARGV[0];
 open (my $fh, '<', $authkeyfile) or die "$!\n";
 while (defined (my $line = <$fh>)) {
@@ -59,48 +57,3 @@ while (defined (my $line = <$fh>)) {
    printf "%-12s %-10s %-18s %s\n",$decoded{type},$decoded{modbits},$decoded{fingerprint},$comment;
 }
 close $fh;
-
-__END__
-#!/bin/bash
-#
-# Check keys in authorized_keys files allowing access without a password
-# We also checksum each key found so we can easily compare and identify duplicate keys
-# TRCM 10/01/2011
-
-function error_exit {
-        echo -e "$*"
-        exit 1
-}
-
-# Set the default user to check as root, or use the 1st cmdline argument
-if [[ $# -eq 0 ]]; then
-      eval username="~root"
-else
-      eval username="~$1"
-fi
-
-# Find my authorized keys files accounting for old SSH versions
-KEYSSHv1="`find $username/.ssh/. ! -name . -prune -type f -name authorized_keys 2>/dev/null`"
-KEYSSHv2="`find $username/.ssh/. ! -name . -prune -type f -name authorized_keys2 2>/dev/null`"
-
-[ $KEYSSHv1 ] && KEYS=$KEYSSHv1
-[ $KEYSSHv2 ] && KEYS=$KEYSSHv2
-[ $KEYS ] || error_exit "Couldn't find an authorized_keys file in $username"
-
-echo "--> $KEYS"
-printf "CHECKSUM     : USERNAME   : HOST\n"
-
-# field 4 will be empty if there are no SSH options present in field 1,
-# in this way, we ensure the read only gets the last two fields
-awk '{print $4 " " $3 " " $2}' $KEYS | \
-   while read comment key; do
-      # digest the comment from the standard user@host
-      echo $comment | awk -F@ '{print $1 " " $2}' | \
-          while read user host; do
-          if [ -z $host ]; then
-              printf "%-12s :            : %s\n" "$(echo $key | cksum | awk '{print $1}')" "$user"
-          else
-              printf "%-12s : %-10s : %s\n" "$(echo $key | cksum | awk '{print $1}')" "$user" "$host"
-          fi
-      done
-   done | sort -n
