@@ -53,7 +53,21 @@ while (defined (my $line = <$fh>)) {
    my $base64 = [split (/\s+/,$line)]->[1];
    my $comment = [split (/\s+/,$line)]->[2];
    my %decoded = grok_pubkey($base64);
-   printf "Type         Size(bits) Fingerprint                                     Comment\n" if ($. eq 1);
-   printf "%-12s %-10s %-18s %s\n",$decoded{type},$decoded{modbits},$decoded{fingerprint},$comment;
+   printf("Type         Size(bits) Fingerprint                                     Comment\n") if ($. eq 1);
+   if (-t STDOUT) {
+      my $colour;
+      if ($decoded{modbits} < 1024) {
+         $colour = '31'; # 31=red,32=green,33=yellow
+      } elsif ($decoded{modbits} < 2048) {
+         $colour = '33'; # 31=red,32=green,33=yellow
+      } elsif ($decoded{modbits} >= 4096) {
+         $colour = '32'; # 31=red,32=green,33=yellow
+      } else {
+         $colour = '0';
+      }
+      printf("%-12s \e[%dm%-10s\e[m %-18s %s\n",$decoded{type},$colour,$decoded{modbits},$decoded{fingerprint},$comment);
+   } else {
+      printf("%-12s %-10s %-18s %s\n",$decoded{type},$decoded{modbits},$decoded{fingerprint},$comment);
+   }
 }
 close $fh;
