@@ -106,9 +106,9 @@ sub showit(\%) {
     if (defined $sshfp && -t STDOUT) {
         # Format the fingerprint in the form of an SSHFP RR record
         # eg.  host.example.  SSHFP 2 1 123456789abcdef67890123456789abcdef67890 (1/2=RSA/DSS,1=SHA1)
-        printf("%-4d %-20s \e[%dm%-6s\e[m \"SSHFP %d 1 %s\"  \"%s\"\n",$.,$out{type},$colour,$out{modbits},$out{typever},$out{fp_sha1},$out{comment});
+        printf("%-4d %-20s \e[%dm%-6s\e[m \"SSHFP %s 1 %s\"  \"%s\"\n",$.,$out{type},$colour,$out{modbits},$out{typever},$out{fp_sha1},$out{comment});
     } elsif (defined $sshfp) {
-        printf("%-4d %-20s %-6s \"SSHFP %d 1 %s\"  \"%s\"\n",$.,$out{type},$out{modbits},$out{typever},$out{fp_sha1},$out{comment});
+        printf("%-4d %-20s %-6s \"SSHFP %s 1 %s\"  \"%s\"\n",$.,$out{type},$out{modbits},$out{typever},$out{fp_sha1},$out{comment});
     } elsif (-t STDOUT) {
         printf("%-4d %-20s \e[%dm%-6s\e[m %-48s  \"%s\"\n",$.,$out{type},$colour,$out{modbits},$out{fp_md5},$out{comment});
     } else {
