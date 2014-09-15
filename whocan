@@ -4,7 +4,7 @@
 # 10/01/2011 - TRCM - original bash version
 # 11/09/2015 - TRCM - migrated to PERL so we can grok info from the public SSH key
 #
-# TODO : Handle ECDSA keytypes of ecdsa-sha512-nistp521 , ecdsa-sha2-nistp521
+# TODO : Handle SSHv1 keytypes
 use warnings;
 use strict;
 use Getopt::Long;
@@ -13,7 +13,7 @@ use MIME::Base64;
 use Digest::MD5 qw(md5_hex);
 use Digest::SHA qw(sha1_hex);
 
-our $VERSION = "0.1";
+our $VERSION = "0.2";
 my $name = basename($0);
 my ($sshfp,%decoded,$rodeo);
 wtf() unless @ARGV > 0 or (! -t STDIN);
@@ -23,6 +23,10 @@ GetOptions ('h|help|?' => sub{ info($VERSION);wtf(); },
 # dont buffer my output pls
 local $| = 1;
 
+my $endian = sprintf unpack 'I', "\x01\x02\x03\x04";
+if ($endian eq "67305985") {$endian="little"}
+if ($endian eq "16909060") {$endian="big"}
+
 my $keyfile = $ARGV[0];
 open (my $fh, '<', $keyfile) or die "$!\n";
 while (defined (my $line = <$fh>)) {
@@ -31,7 +35,7 @@ while (defined (my $line = <$fh>)) {
     $line =~ s/\s+$//;     # Remove trailing blanks
     next if $line =~ m/^$/; # Ignore empty lines
     next if $line =~ m/^#/; # Ignore comment lines
-    my ($keystring,$comment) = ($line =~ m/([a-zA-Z0-9+=\/]{80,})\s*(.*)$/);
+    my ($keystring,$comment) = ($line =~ m/([a-zA-Z0-9+=\/]{65,})\s*(.*)$/);
     next unless defined($keystring);
     $decoded{comment} = $comment;
     # Does the string look like an SSH-1 key?
@@ -53,7 +57,7 @@ while (defined (my $line = <$fh>)) {
         $decoded{fail} = 'true';
         $decoded{type} = 'n/a';
         $decoded{modbits} = 'n/a';
-        $decoded{fp_md5} = $decoded{fp_sha1} = 'bad_line';
+        $decoded{fp_md5} = $decoded{fp_sha1} = 'could_not_decode';
         &showit(\%decoded);
         next;
     }
@@ -64,11 +68,11 @@ close $fh;
 #------------------------------------------------------------------------------
 sub showheader {
     if (defined $sshfp) {
-        print "Line  KeyType      Bits   \"SSHFP RR record\"                                    Comment\n";
-        print "---- ------------ ------ ---------------------------------------------------- -------------\n";
+        print "Line  KeyType             Bits   \"SSHFP RR record\"                                    Comment\n";
+        print "---- ------------------- ------ ---------------------------------------------------- -------------\n";
     } else {
-        print "Line  KeyType      Bits   Fingerprint (MD5)                                 Comment\n";
-        print "---- ------------ ------ ------------------------------------------------- -------------\n";
+        print "Line  KeyType             Bits   Fingerprint (MD5)                                 Comment\n";
+        print "---- ------------------- ------ ------------------------------------------------- -------------\n";
     }
     return;
 }
@@ -79,11 +83,11 @@ sub showit(\%) {
     my %out = %$hashref;
     unless (defined $rodeo) {showheader};
     if (defined $sshfp && exists $out{fail}) {
-        printf ("%-4d %-12s %-6s %-52s  \"%s\"\n",$out{line},$out{type},$out{modbits},$out{fp_sha1},$out{comment});
+        printf ("%-4d %-20s %-6s %-52s  \"%s\"\n",$out{line},$out{type},$out{modbits},$out{fp_sha1},$out{comment});
         $rodeo++;
         return;
     } elsif (exists $out{fail}) {
-        printf ("%-4d %-12s %-6s %-48s  \"%s\"\n",$out{line},$out{type},$out{modbits},$out{fp_md5},$out{comment});
+        printf ("%-4d %-20s %-6s %-48s  \"%s\"\n",$out{line},$out{type},$out{modbits},$out{fp_md5},$out{comment});
         $rodeo++;
         return;
     } else {};
@@ -95,19 +99,20 @@ sub showit(\%) {
     );
     my $colour;
     if ($out{modbits} < 1024) { $colour = $c{red}; }
+    if ($out{modbits} < 1024 && $out{type} =~ m/ed2|ecdsa/) { $colour = $c{green}; }
     elsif ($out{modbits} < 2048) { $colour = $c{yellow}; }
     elsif ($out{modbits} >= 4096) { $colour = $c{green}; }
     else { $colour = $c{none}; }
     if (defined $sshfp && -t STDOUT) {
         # Format the fingerprint in the form of an SSHFP RR record
         # eg.  host.example.  SSHFP 2 1 123456789abcdef67890123456789abcdef67890 (1/2=RSA/DSS,1=SHA1)
-        printf("%-4d %-12s \e[%dm%-6s\e[m \"SSHFP %d 1 %s\"  \"%s\"\n",$.,$out{type},$colour,$out{modbits},$out{typever},$out{fp_sha1},$out{comment});
+        printf("%-4d %-20s \e[%dm%-6s\e[m \"SSHFP %d 1 %s\"  \"%s\"\n",$.,$out{type},$colour,$out{modbits},$out{typever},$out{fp_sha1},$out{comment});
     } elsif (defined $sshfp) {
-        printf("%-4d %-12s %-6s \"SSHFP %d 1 %s\"  \"%s\"\n",$.,$out{type},$out{modbits},$out{typever},$out{fp_sha1},$out{comment});
+        printf("%-4d %-20s %-6s \"SSHFP %d 1 %s\"  \"%s\"\n",$.,$out{type},$out{modbits},$out{typever},$out{fp_sha1},$out{comment});
     } elsif (-t STDOUT) {
-        printf("%-4d %-12s \e[%dm%-6s\e[m %-48s  \"%s\"\n",$.,$out{type},$colour,$out{modbits},$out{fp_md5},$out{comment});
+        printf("%-4d %-20s \e[%dm%-6s\e[m %-48s  \"%s\"\n",$.,$out{type},$colour,$out{modbits},$out{fp_md5},$out{comment});
     } else {
-        printf("%-4d %-12s %-6s %-48s  \"%s\"\n",$.,$out{type},$out{modbits},$out{fp_md5},$out{comment});
+        printf("%-4d %-20s %-6s %-48s  \"%s\"\n",$.,$out{type},$out{modbits},$out{fp_md5},$out{comment});
     }
     $rodeo++;
     return;
@@ -129,11 +134,12 @@ sub decode_pubkey($) {
         modbits  => undef,   # convert to bits
         mod      => undef    # public key modulus
     );
+
     # Compute the MD5 or SHA1 key fingerprints
     $key{fp_md5} = join ':', (unpack '(A2)*', md5_hex($bytes));
     $key{fp_sha1} = sha1_hex($bytes) if (defined $sshfp);
-    $key{typelen} = unpack "I", substr($bytes,$offset,4);               $offset += 4;
-    if ($key{typelen} <= 1 || $key{typelen} >= 16) {
+    $key{typelen} = unpack "N", substr($bytes,$offset,4);               $offset += 4;
+    if ($key{typelen} <= 1 || $key{typelen} >= 20) {
         # Something went wrong, whatever we tried to parse wasn't a good key
         return;
     };
@@ -141,21 +147,35 @@ sub decode_pubkey($) {
     if ($key{type} =~ m/rsa/) {
         $key{typever} = 1;
         # RSA format has exponent then modulus
-        $key{explen} = unpack("I", substr($bytes,$offset,4));           $offset += 4;
-        $key{expbits} = ($key{explen})*8;
+        $key{explen} = unpack("N", substr($bytes,$offset,4));           $offset += 4;
         $key{expo} = unpack "A", substr($bytes,$offset,$key{explen});   $offset += $key{explen};
-        $key{modlen} = unpack("I", substr($bytes,$offset,4));           $offset += 4;
+        $key{modlen} = unpack("N", substr($bytes,$offset,4));           $offset += 4;
         $key{modbits} = ($key{modlen}-1)*8; # modulus gets padded with zero, so subtract one.
         $key{mod} = unpack "A", substr($bytes,$offset,$key{modlen});
-    } elsif ($key{type} =~ m/ds[as]/) {
+    } elsif ($key{type} =~ m/dss/) {
         $key{typever} = 2;
         # DSS format has modulus then exponent
-        $key{modlen} = unpack("I", substr($bytes,$offset,4));           $offset += 4;
+        $key{modlen} = unpack("N", substr($bytes,$offset,4));           $offset += 4;
         $key{modbits} = ($key{modlen}-1)*8; # modulus gets padded with zero, so subtract one.
         $key{mod} = unpack "A", substr($bytes,$offset,$key{modlen});    $offset += $key{modlen};
-        $key{explen} = unpack("I", substr($bytes,$offset,4));           $offset += 4;
-        $key{expbits} = ($key{explen}-1)*8;
+        $key{explen} = unpack("N", substr($bytes,$offset,4));           $offset += 4;
         $key{expo} = unpack "A", substr($bytes,$offset,$key{explen});
+    } elsif ($key{type} =~ m/ecdsa/) {
+        $key{typever} = "x";
+        # ECDSA format has domain parameters, pubkeyval (04,X-coord,Y-coord) (X-coord =~ keysize)
+        $key{paramlen} = unpack("N", substr($bytes,$offset,4));          $offset += 4;
+        $key{param} = unpack "A", substr($bytes,$offset,$key{paramlen}); $offset += $key{paramlen};
+        $key{modlen} = unpack("N", substr($bytes,$offset,4));            $offset += 4;
+        $key{modbits} = ($key{modlen}-1)*8/2; # pubkey gets padded with 04, /2 to get just X-coord
+        $key{mod} = unpack "A", substr($bytes,$offset,$key{modlen});
+    } elsif ($key{type} =~ m/ed25519/) {
+        # ED25519 format has modulus and ?no? exponent
+        $key{typever} = "y";
+        $key{modlen} = unpack("N", substr($bytes,$offset,4));           $offset += 4;
+        $key{modbits} = ($key{modlen}-1)*8; # modulus gets padded with zero, so subtract one.
+        $key{mod} = unpack "A", substr($bytes,$offset,$key{modlen});    $offset += $key{modlen};
+        #$key{explen} = unpack("N", substr($bytes,$offset,4));           $offset += 4;
+        #$key{expo} = unpack "A", substr($bytes,$offset,$key{explen});
     } else { return };
     return %key;
 }
