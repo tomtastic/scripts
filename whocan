@@ -2,72 +2,172 @@
 # Check keys in authorized_keys files allowing access without a password
 # checksum each key found so we can easily compare and identify duplicate keys
 # 10/01/2011 - TRCM - original bash version
-# 11/09/2015 - TRCM - migrated to PERL so we can grok info from the public SSH key itself
+# 11/09/2015 - TRCM - migrated to PERL so we can grok info from the public SSH key
+#
+# TODO : Handle ECDSA keytypes of ecdsa-sha512-nistp521 , ecdsa-sha2-nistp521
+use warnings;
+use strict;
+use Getopt::Long;
+use File::Basename qw(basename);
 use MIME::Base64;
 use Digest::MD5 qw(md5_hex);
+use Digest::SHA qw(sha1_hex);
 
-sub grok_pubkey($) {
-   # Takes a base64 encoded SSH public key and returns a hash of values
-   my $bytes = decode_base64(shift);
-   my $offset=0;
-   my %grok = (
-       fingerprint => undef,
-       typelen  => undef,   # 4 byte field length      # eg. 7
-       type     => undef,   # key type (ASCII encoded) # eg. "ssh-dss"
-       explen   => undef,   # 4 byte field length      # eg. 3
-       expbits  => undef,   # convert to bits
-       expo     => undef,   # public exponent          # eg. 65537
-       modlen   => undef,   # 4 byte field length      # eg. our key length (1024 / 2048 / etc)
-       modbits  => undef,   # convert to bits
-       mod      => undef
-   );
-   $grok{fingerprint} = join ':', (unpack '(A2)*', md5_hex($bytes));
-   $grok{typelen} = unpack "N", substr($bytes,$offset,4);                  $offset += 4;
-   $grok{type} = unpack "A*", substr($bytes,$offset,$grok{typelen});       $offset += $grok{typelen};
-   if ($grok{type} =~ m/rsa/) {
-      # RSA format has exponent then modulus
-      $grok{explen} = unpack("N", substr($bytes,$offset,4));            $offset += 4;
-      $grok{expbits} = ($grok{explen})*8;
-      $grok{expo} = unpack "A", substr($bytes,$offset,$grok{explen}); $offset += $grok{explen};
-      $grok{modlen} = unpack("N", substr($bytes,$offset,4));               $offset += 4;
-      $grok{modbits} = ($grok{modlen}-1)*8; # modulus gets padded with zero, so subtract one.
-      $grok{mod} = unpack "A", substr($bytes,$offset,$grok{modlen});
-   } else {
-      # DSS format has modulus then exponent
-      $grok{modlen} = unpack("N", substr($bytes,$offset,4));               $offset += 4;
-      $grok{modbits} = ($grok{modlen}-1)*8; # modulus gets padded with zero, so subtract one.
-      $grok{mod} = unpack "A", substr($bytes,$offset,$grok{modlen});       $offset += $grok{modlen};
-      $grok{explen} = unpack("N", substr($bytes,$offset,4));            $offset += 4;
-      $grok{expbits} = ($grok{explen}-1)*8;
-      $grok{expo} = unpack "A", substr($bytes,$offset,$grok{explen});
-   }
-   return %grok;
-}
+our $VERSION = "0.1";
+my $name = basename($0);
+my ($sshfp,%decoded,$rodeo);
+wtf() unless @ARGV > 0 or (! -t STDIN);
+GetOptions ('h|help|?' => sub{ info($VERSION);wtf(); },
+            's|sha|sshfp' => \$sshfp,
+) or wtf();
+# dont buffer my output pls
+local $| = 1;
 
-my $authkeyfile = $ARGV[0];
-open (my $fh, '<', $authkeyfile) or die "$!\n";
+my $keyfile = $ARGV[0];
+open (my $fh, '<', $keyfile) or die "$!\n";
 while (defined (my $line = <$fh>)) {
-   chomp($line);
-   # FIXME : need better regex to select the base64 string
-   # my ($options,$base64,$comment) =~ m/^(blah)\s+\w+?\s+(.+?)$/
-   my $base64 = [split (/\s+/,$line)]->[1];
-   my $comment = [split (/\s+/,$line)]->[2];
-   my %decoded = grok_pubkey($base64);
-   printf("Type         Size(bits) Fingerprint                                     Comment\n") if ($. eq 1);
-   if (-t STDOUT) {
-      my $colour;
-      if ($decoded{modbits} < 1024) {
-         $colour = '31'; # 31=red,32=green,33=yellow
-      } elsif ($decoded{modbits} < 2048) {
-         $colour = '33'; # 31=red,32=green,33=yellow
-      } elsif ($decoded{modbits} >= 4096) {
-         $colour = '32'; # 31=red,32=green,33=yellow
-      } else {
-         $colour = '0';
-      }
-      printf("%-12s \e[%dm%-10s\e[m %-18s %s\n",$decoded{type},$colour,$decoded{modbits},$decoded{fingerprint},$comment);
-   } else {
-      printf("%-12s %-10s %-18s %s\n",$decoded{type},$decoded{modbits},$decoded{fingerprint},$comment);
-   }
+    chomp($line);
+    $line =~ s/^\s+//;     # Remove leading blanks
+    $line =~ s/\s+$//;     # Remove trailing blanks
+    next if $line =~ m/^$/; # Ignore empty lines
+    next if $line =~ m/^#/; # Ignore comment lines
+    my ($keystring,$comment) = ($line =~ m/([a-zA-Z0-9+=\/]{80,})\s*(.*)$/);
+    next unless defined($keystring);
+    $decoded{comment} = $comment;
+    # Does the string look like an SSH-1 key?
+    if ($keystring =~ m/[0-9]{30,}/) {
+        $decoded{line} = $.;
+        $decoded{fail} = 'true';
+        $decoded{type} = 'ssh-1';
+        $decoded{modbits} = 'n/a';
+        $decoded{fp_md5} = $decoded{fp_sha1} = 'not_implemented';
+        &showit(\%decoded);
+        next;
+    }
+    # Try decoding the keytype and modulus bits and fingerprint from the key
+    my %decoded = &decode_pubkey($keystring);
+    $decoded{comment} = $comment;
+    # Did we fail to decode the number of modulus bits?
+    if (! exists $decoded{modbits}) {
+        $decoded{line} = $.;
+        $decoded{fail} = 'true';
+        $decoded{type} = 'n/a';
+        $decoded{modbits} = 'n/a';
+        $decoded{fp_md5} = $decoded{fp_sha1} = 'bad_line';
+        &showit(\%decoded);
+        next;
+    }
+    # Looks like we've had success, print all the things
+    &showit(\%decoded);
 }
 close $fh;
+#------------------------------------------------------------------------------
+sub showheader {
+    if (defined $sshfp) {
+        print "Line  KeyType      Bits   \"SSHFP RR record\"                                    Comment\n";
+        print "---- ------------ ------ ---------------------------------------------------- -------------\n";
+    } else {
+        print "Line  KeyType      Bits   Fingerprint (MD5)                                 Comment\n";
+        print "---- ------------ ------ ------------------------------------------------- -------------\n";
+    }
+    return;
+}
+#------------------------------------------------------------------------------
+sub showit(\%) {
+    # We take a reference to a hash, then print the output accordingly
+    my $hashref = shift;
+    my %out = %$hashref;
+    unless (defined $rodeo) {showheader};
+    if (defined $sshfp && exists $out{fail}) {
+        printf ("%-4d %-12s %-6s %-52s  \"%s\"\n",$out{line},$out{type},$out{modbits},$out{fp_sha1},$out{comment});
+        $rodeo++;
+        return;
+    } elsif (exists $out{fail}) {
+        printf ("%-4d %-12s %-6s %-48s  \"%s\"\n",$out{line},$out{type},$out{modbits},$out{fp_md5},$out{comment});
+        $rodeo++;
+        return;
+    } else {};
+    my %c = (
+        green => '32',
+        yellow => '33',
+        red => '31',
+        none => '0'
+    );
+    my $colour;
+    if ($out{modbits} < 1024) { $colour = $c{red}; }
+    elsif ($out{modbits} < 2048) { $colour = $c{yellow}; }
+    elsif ($out{modbits} >= 4096) { $colour = $c{green}; }
+    else { $colour = $c{none}; }
+    if (defined $sshfp && -t STDOUT) {
+        # Format the fingerprint in the form of an SSHFP RR record
+        # eg.  host.example.  SSHFP 2 1 123456789abcdef67890123456789abcdef67890 (1/2=RSA/DSS,1=SHA1)
+        printf("%-4d %-12s \e[%dm%-6s\e[m \"SSHFP %d 1 %s\"  \"%s\"\n",$.,$out{type},$colour,$out{modbits},$out{typever},$out{fp_sha1},$out{comment});
+    } elsif (defined $sshfp) {
+        printf("%-4d %-12s %-6s \"SSHFP %d 1 %s\"  \"%s\"\n",$.,$out{type},$out{modbits},$out{typever},$out{fp_sha1},$out{comment});
+    } elsif (-t STDOUT) {
+        printf("%-4d %-12s \e[%dm%-6s\e[m %-48s  \"%s\"\n",$.,$out{type},$colour,$out{modbits},$out{fp_md5},$out{comment});
+    } else {
+        printf("%-4d %-12s %-6s %-48s  \"%s\"\n",$.,$out{type},$out{modbits},$out{fp_md5},$out{comment});
+    }
+    $rodeo++;
+    return;
+}
+#------------------------------------------------------------------------------
+sub decode_pubkey($) {
+    # Takes a base64 encoded SSH public key and returns a hash of values
+    my $bytes = decode_base64(shift);
+    my $offset=0;
+    my %key = (
+        fp_md5 => undef,
+        fp_sha1 => undef,
+        typelen  => undef,   # 4 byte field length      # eg. 7
+        type     => undef,   # key type (ASCII encoded) # eg. "ssh-dss / ssh-rsa"
+        explen   => undef,   # 4 byte field length      # eg. 3
+        expbits  => undef,   # convert to bits
+        expo     => undef,   # public key exponent      # eg. 65537
+        modlen   => undef,   # 4 byte field length      # eg. modulus length in bytes
+        modbits  => undef,   # convert to bits
+        mod      => undef    # public key modulus
+    );
+    # Compute the MD5 or SHA1 key fingerprints
+    $key{fp_md5} = join ':', (unpack '(A2)*', md5_hex($bytes));
+    $key{fp_sha1} = sha1_hex($bytes) if (defined $sshfp);
+    $key{typelen} = unpack "I", substr($bytes,$offset,4);               $offset += 4;
+    if ($key{typelen} <= 1 || $key{typelen} >= 16) {
+        # Something went wrong, whatever we tried to parse wasn't a good key
+        return;
+    };
+    $key{type} = unpack "A*", substr($bytes,$offset,$key{typelen});     $offset += $key{typelen};
+    if ($key{type} =~ m/rsa/) {
+        $key{typever} = 1;
+        # RSA format has exponent then modulus
+        $key{explen} = unpack("I", substr($bytes,$offset,4));           $offset += 4;
+        $key{expbits} = ($key{explen})*8;
+        $key{expo} = unpack "A", substr($bytes,$offset,$key{explen});   $offset += $key{explen};
+        $key{modlen} = unpack("I", substr($bytes,$offset,4));           $offset += 4;
+        $key{modbits} = ($key{modlen}-1)*8; # modulus gets padded with zero, so subtract one.
+        $key{mod} = unpack "A", substr($bytes,$offset,$key{modlen});
+    } elsif ($key{type} =~ m/ds[as]/) {
+        $key{typever} = 2;
+        # DSS format has modulus then exponent
+        $key{modlen} = unpack("I", substr($bytes,$offset,4));           $offset += 4;
+        $key{modbits} = ($key{modlen}-1)*8; # modulus gets padded with zero, so subtract one.
+        $key{mod} = unpack "A", substr($bytes,$offset,$key{modlen});    $offset += $key{modlen};
+        $key{explen} = unpack("I", substr($bytes,$offset,4));           $offset += 4;
+        $key{expbits} = ($key{explen}-1)*8;
+        $key{expo} = unpack "A", substr($bytes,$offset,$key{explen});
+    } else { return };
+    return %key;
+}
+#------------------------------------------------------------------------------
+sub wtf {
+   printf("Usage: %s [-h|-help] [-s|-sha|-sha1] public_key_file\n",$name);
+   exit;
+}
+#------------------------------------------------------------------------------
+sub info {
+   my $s_version = shift;
+   printf("\e[%dm%s\e[m - %s  (PERL v%vd)\n",33,$name,$s_version,$^V);
+   return;
+}
+#------------------------------------------------------------------------------
