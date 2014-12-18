@@ -2,11 +2,12 @@
 # 08/10/2013 - TRCM - play nicely when reading multiline stdin from a pipe (v2.9)
 #                   - heed some PerlCritic advice (v2.94)
 #                   - uninitialised value bugs (v2.95)
-# 07/01/2014 - TRCM - (DB) query dbSquared for SATHS
 # 12/02/2014 - TRCM - fix error codes on bad hostnames
 # 02/05/2014 - TRCM - fix host parsing when fed from loop (eg. not stdin)
 # 23/06/2014 - TRCM - add option for IPv6 (v3.1)
 # 28/08/2014 - TRCM - add timings (v3.2)
+# 12/12/2014 - TRCM - pass an SSH identification string (v3.3)
+#                   - preventing sshd "Did not receive identification string" informational notice
 #
 # TODO: Add a brief mode, printing more tersely with  just 'success/fail'
 # TODO: Can we get any more details from the BladeLogic packets?
@@ -19,7 +20,7 @@ use File::Basename qw(basename);
 use Getopt::Long;
 use Time::HiRes qw(time);
 
-our $VERSION = "3.2";
+our $VERSION = "3.3";
 my $name = basename($0);
 
 # Flush to STDOUT as it happens, don't buffer.
@@ -181,27 +182,37 @@ sub poke {
    # Special poking for special ports
    for ($port) {
       # BladeLogic
-      /4750/  && do {
-                         # If we're checking the RSCD(4750/tcp) service, send some magic first
-                         # The clienthello string contents were experimentally found
-                         my $s_socket_send_rscdinit = "TLS";
-                         my $s_socket_send_rscdclienthello = pack( 'H*', '16030100490100004503015215ef8253b424768b3a19e6f8def4ebf0157db11d475b97c4d40b3e0af6c26e00001800390038003500160013000a00330032002f0007000500ff0100000400230000' );
-                         if ( defined(IO::Select->new($s_socket)->can_write($timeout)) ) {
-                            $s_socket->send($s_socket_send_rscdinit);
-                            $s_socket->send($s_socket_send_rscdclienthello);
-                            $s_socket_read_length = 256;
-                         }
-                      };
+      /4750/ && do {
+         # If we're checking the RSCD(4750/tcp) service, send some magic first
+         # The clienthello string contents were experimentally found
+         my $rscdinit = "TLS";
+         my $rscdclienthello = pack( 'H*', '16030100490100004503015215ef8253b424768b3a19e6f8def4ebf0157db11d475b97c4d40b3e0af6c26e00001800390038003500160013000a00330032002f0007000500ff0100000400230000' );
+         if ( defined(IO::Select->new($s_socket)->can_write($timeout)) ) {
+            $s_socket->send($rscdinit);
+            $s_socket->send($rscdclienthello);
+            $s_socket_read_length = 256;
+         }
+         last;
+      };
       # HTTP
-      /80/    && do {
-                         # If we're checking the HTTP(80/tcp) service, fire a GET
-                         my $s_socket_send_httpsinit = "GET / HTTP/1.1\r\nhost: $s_host\r\n\r\n";
-                         if ( defined(IO::Select->new($s_socket)->can_write($timeout)) ) {
-                            $s_socket->send($s_socket_send_httpsinit);
-                            $s_socket_read_length = 512;
-                            @s_fragments = ( 0,1,2,3,4,5,6,7 ); # Read several times from the socket, as response often fragmented
-                         }
-                      };
+      /80/ && do {
+         # If we're checking the HTTP(80/tcp) service, fire a GET
+         my $httpsinit = "GET / HTTP/1.1\r\nhost: $s_host\r\n\r\n";
+         if ( defined(IO::Select->new($s_socket)->can_write($timeout)) ) {
+            $s_socket->send($httpsinit);
+            $s_socket_read_length = 512;
+            @s_fragments = ( 0,1,2,3,4,5,6,7 ); # Read several times from the socket, as response often fragmented
+         }
+         last;
+      };
+      # SSH
+      /22/ && do {
+         # Be polite and pass a client hello to sshd
+         my $sshclienthello = "SSH-2.0-pport_$VERSION\n";
+         $s_socket->send($sshclienthello);
+         last;
+      };
+      # By default, say nothing
    }
 
    # Listen to the response
@@ -295,3 +306,4 @@ sub wtf {
    printf("Usage: %s -dhs6 [-i file] [-p tcp_port] [-t timeout_secs] hostname\n",$name);
    exit;
 }
+#------------------------------------------------------------------------------
