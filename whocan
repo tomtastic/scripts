@@ -1,8 +1,8 @@
 #!/usr/bin/env perl
-# Check keys in authorized_keys files allowing access without a password
-# checksum each key found so we can easily compare and identify duplicate keys
+# Check keys in authorized_keys files allowing non-interactive access
+# checksum each key found so we can easily compare or identify duplicate keys
 # 10/01/2011 - TRCM - original bash version
-# 11/09/2015 - TRCM - migrated to PERL so we can grok info from the public SSH key
+# 11/09/2014 - TRCM - migrated to PERL so we can grok info from the public SSH key
 #
 # TODO : Handle SSHv1 keytypes
 use warnings;
@@ -10,22 +10,22 @@ use strict;
 use Getopt::Long;
 use File::Basename qw(basename);
 use MIME::Base64;
-use Digest::MD5 qw(md5_hex);
+use Digest::MD5 qw(md5_hex); # md5, md5_hex, md5_base64, depending on preference
 use Digest::SHA qw(sha1_hex);
 
-our $VERSION = "0.2";
+our $VERSION = "0.4";
 my $name = basename($0);
 my ($sshfp,%decoded,$rodeo);
 wtf() unless @ARGV > 0 or (! -t STDIN);
-GetOptions ('h|help|?' => sub{ info($VERSION);wtf(); },
+GetOptions ('h|help|v|V|?' => sub{ info($VERSION);wtf(); },
             's|sha|sshfp' => \$sshfp,
 ) or wtf();
 # dont buffer my output pls
 local $| = 1;
 
-my $endian = sprintf unpack 'I', "\x01\x02\x03\x04";
-if ($endian eq "67305985") {$endian="little"}
-if ($endian eq "16909060") {$endian="big"}
+#my $endian = sprintf unpack 'I', "\x01\x02\x03\x04";
+#if ($endian eq "67305985") {$endian="little"}
+#if ($endian eq "16909060") {$endian="big"}
 
 my $keyfile = $ARGV[0];
 open (my $fh, '<', $keyfile) or die "$!\n";
