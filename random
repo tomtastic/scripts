@@ -1,0 +1,117 @@
+#!/usr/bin/env perl -w
+# 01/12/2014 - TRCM - prints random digit(s) up to the supplied max integer
+#                   - optionally, append a text histogram to stderr (-h)
+# usage: ./random <max_integer> [ <count> -h ]
+#------------------------------------------------------------------------
+# The system we developed on actually calls libc's drand48, which has a
+# periodicity of 2**48, so at 16M numbers per second will only repeat in
+# a 6 month period. Better than a standard rand call with 2**31 (2mins).
+# 2148/1:         open64("/dev/urandom", O_RDONLY)                = 3
+# 2148/1@1:           -> libc:srand48(0x4513b8a1, 0x2cc4, 0xff2e297c, 0xff348000)
+# 2148/1@1:           <- libc:srand48() = 1
+# 2148/1@1:           -> libc:drand48(0x1, 0x1, 0x30c4, 0x3000)
+# 2148/1@1:           <- libc:drand48() = 1
+#------------------------------------------------------------------------
+# Or override rand with a Mersenne Twister... (period of 2**19937-1)
+# Note MT is the default PRNG in Python,Ruby,CLISP,MVC++,...
+#use Math::Random::MT qw(rand);
+#------------------------------------------------------------------------
+# Numbers above 9907773560020060 seem to generate only even results?
+# bash-3.2$ perl -Mbignum -e 'printf "%d\n",2**48'
+# 281474976710656
+# bash-3.2$ perl -Mbignum -e 'printf "%d\n",2**53'
+# 9007199254740992
+
+my $MAX_VALUE=2**52;      # Inputs above 2*53 produce only even values?
+my $HIST_MAX_VALUE=256;
+
+#use bignum;
+my @randoms;
+if (defined($ARGV[0])) {
+   warn "<W> Values approaching 2**53 tend to produce bad results!\n" if ($ARGV[0] >= $MAX_VALUE);
+   if (defined($ARGV[1])) {
+      local $| = 1; # Dont buffer the output
+      for (my $i=0;$i<$ARGV[1];$i++) {
+         #push(@randoms,(1+int(rand($ARGV[0]))));
+         push(@randoms,(int(rand($ARGV[0]+1))));
+      }
+      foreach my $random (@randoms) {
+         print("$random\n");
+      }
+      if (defined($ARGV[2])) {
+         if ($ARGV[2] eq "-h") {;
+            die("<E> Histogram disabled for values above $HIST_MAX_VALUE\n") if ($ARGV[0] >= $HIST_MAX_VALUE);
+            show_histogram(\@randoms);
+         }
+      }
+   } else {
+      print int(rand($ARGV[0]+1)) . "\n";
+   }
+} else { die("usage: random <max_number> <repetitions> -h\n"); }
+
+#------------------------------------------------------------------------
+sub show_histogram
+{
+   # Stuff the histogram onto stderr by default
+   my $output_stream = "STDERR";
+
+   # Prints a simple text histogram given a reference
+   # to an array of integers.
+   my ($array_ref, $binsize, $width) = @_;
+   $binsize ||= 1;
+   $width   ||= 60;
+
+   use POSIX qw(ceil floor);
+
+   # Divide input data into bins:
+   my %bin_count = ();   # number of items in each bin
+   foreach ( @$array_ref ) {
+      my $bin = floor(($_+.5)/$binsize);
+      $bin_count{$bin}++;
+   }
+
+   my $max_items = 0;   # maximum items in a single bin
+   foreach ( values %bin_count ) {
+      $max_items = $_ if $_ > $max_items;
+   }
+
+   # Try to keep histogram on one page width:
+   my $scale = 1;
+   if ( $max_items > $width ) {
+      if ( $max_items <= ($width*5) ) {
+         $scale = 5;
+      }
+      else {
+         while ( ($max_items/$scale) > $width ) {
+            $scale *= 10;
+         }
+      }
+   }
+
+   my @bins   = sort {$a <=> $b} keys %bin_count;
+   my $bin    = $bins[0];    # lowest value bin
+   my $maxbin = $bins[-1];   # highest value bin
+
+   my $binfmt_width = ( length $maxbin > length $bin )
+                      ? length $maxbin : length $bin;
+   my $cntfmt_width = length $max_items;
+
+   my $start = $bin * $binsize;
+   my $end   = $start + $binsize - 1;
+   printf $output_stream "\nHistogram :\n";
+   do {
+      my $count = $bin_count{$bin} || 0;
+      my $extra = ( $count % $scale ) ? '.' : '';
+      #if ($count != 0) {
+      printf $output_stream "%*d .. %*d  \[%*d\] %s$extra\n",
+                    $binfmt_width, $start,
+                    $binfmt_width, $end,
+                    $cntfmt_width, $count,
+                    '#' x ceil($count/$scale);
+      #}
+      $start += $binsize;
+      $end   += $binsize;
+   } while ( $bin++ < $maxbin );
+   print $output_stream "\n  Scale: #=$scale\n" if $scale > 1;
+}
+#------------------------------------------------------------------------
