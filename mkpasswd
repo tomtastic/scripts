@@ -1,0 +1,18 @@
+#!/usr/bin/perl
+# trcm - 20140512 - fixed low salt entropy bug, and salt as lowercase hex chars
+# trcm - 20141218 - add md5 and sha formatted passwd strings (draft!)
+use Digest::MD5 qw(md5_hex);
+use Digest::SHA qw(sha256_hex sha512_hex);
+
+print "Enter your password: ";
+chomp($plain = <STDIN>);
+
+# rand is always evaluated as 0, and result restricted to lowercase hex chars only!
+$salt_bug = sprintf("%02x",($$^time^rand)&0xFF); # (pid XOR time XOR rand) AND 0xFF
+$salt = join '', ('.', '/', 0..9, 'A'..'Z', 'a'..'z')[rand 64, rand 64];
+
+print "(DES)\t( salt = $salt_bug ): ",crypt($plain,$salt_bug)," <-- low-salt\n";
+print "(DES)\t( salt = $salt ): ",crypt($plain,$salt),"\n";
+print "(MD5)\t( salt = $salt ): \$1\$",md5_hex(crypt($plain,$salt)),"\n";
+print "(SHA256)\t( salt = $salt ): \$5\$",sha256_hex(crypt($plain,$salt)),"\n";
+print "(SHA512)\t( salt = $salt ): \$6\$",sha512_hex(crypt($plain,$salt)),"\n";
