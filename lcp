@@ -1,0 +1,112 @@
+#!/usr/bin/env perl
+# 16/12/2014 - TRCM - Identify the longest common prefix
+# TODO : allow passing arbmax and filename  via getops
+use strict;
+use warnings;
+# Set to something other than 0 for information on the scoring values
+my $debug=0;
+# experiment with limiting score for larger groupings
+my $arbmax=4;
+
+#-------------------------------------------------------------------
+sub longest_common_prefix {
+   # longest_common_prefix( $|@ ): returns $
+   # find longest common prefix of scalar list
+   my $prefix = shift;
+   for (@_) {
+      chop $prefix while (! /^\Q$prefix\E/);
+   }
+   return $prefix;
+}
+#-------------------------------------------------------------------
+sub lcp_score {
+   my $n = 0;
+   my ($a, $b) = @_;
+   if (($a eq "")) { $a="first_line"; }
+   my @arraya = split(//, $a);
+   my @arrayb = split(//, $b);
+   while($arraya[$n] eq $arrayb[$n]){
+      $n++;
+   }
+   return $n;
+}
+#-------------------------------------------------------------------
+my $fh;
+my $pos;
+
+if (defined($ARGV[0])) {
+   my $inputfile = $ARGV[0]; open ($fh, "<", $inputfile) or die "$!\n";
+   $pos = 0;
+} else {
+   print "DEBUG: Using example data\n" if $debug;
+   $fh = do { local(*FH); \*FH };
+   open ($fh, "<&DATA") or die "$!\n";
+   $pos = tell DATA;
+}
+#-------------------------------------------------------------------
+
+seek($fh,$pos,0);
+my $line_last = "";
+my $score=0;
+my $score_last=0;
+my $array_n=0;
+my @array;
+while (defined (my $line = <$fh>)) {
+   chomp $line;
+   $score=lcp_score($line_last,$line);
+   $score=$arbmax?($score>=$arbmax):$score;
+   if ( $score == 0 || $score < $score_last ) {
+      # Create a new array index as we didn't match well with the last line
+      $array_n++ unless $. == 1; # Dont skip index of 0 pls.
+      print "DEBUG: score=$score : new array($array_n) : $line\n" if $debug;
+      $array[$array_n]=[$line];
+   } else {
+      # Append to the existing array index
+      print "DEBUG: score=$score : append($array_n)    : $line\n" if $debug;
+      push @{$array[$array_n]},$line;
+      #$array_n++;
+   }
+   $score_last = $score;
+   $line_last = $line;
+}
+
+#-------------------------------------------------------------------
+# Sort the LoL by the reverse size and print
+sub by_reverse_array_size {
+   @$b <=> @$a;
+}
+
+foreach my $row (sort by_reverse_array_size @array) {
+   foreach my $column (@$row) {
+      print "$column\n";
+   }
+   print "\n";
+}
+
+#-------------------------------------------------------------------
+seek($fh,$pos,0);
+my @lcp = map {chomp; $_} <$fh>;
+printf("<I> Common prefix matching currently capped at %d characters\n",$arbmax);
+printf("<I> Found %d groupings, %s\n",$array_n+1,longest_common_prefix(@lcp)?"longest common prefix found was '".longest_common_prefix(@lcp)."'":"no common prefix was found");
+
+#-------------------------------------------------------------------
+__DATA__
+nygmdp064
+nygmdp078-sdist01
+nygmdp078
+nygmdsrcdist14t
+nywmddbu02t
+nywmdp001
+nywmdp002-p2ps01
+nywmdp002
+nywmdp003-p2ps01
+nywmdp004-p2ps01
+nywmdp005-p2ps01
+nywmdp006-p2ps01
+nywmdp007-p2ps01
+nywmdp008-p2ps01
+nywmdp008
+nywmdp009-p2ps01
+nywmdp010-p2ps01
+nywmdp011-p2ps01
+nywmdp012
