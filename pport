@@ -8,6 +8,7 @@
 # 28/08/2014 - TRCM - add timings (v3.2)
 # 12/12/2014 - TRCM - pass an SSH identification string (v3.3)
 #                   - preventing sshd "Did not receive identification string" informational notice
+# 06/01/2015 - TRCM - Add option to do more SSH handshake and get allowed_ciphers (v4.0)
 #
 # TODO: Add a brief mode, printing more tersely with  just 'success/fail'
 # TODO: Can we get any more details from the BladeLogic packets?
@@ -20,18 +21,19 @@ use File::Basename qw(basename);
 use Getopt::Long;
 use Time::HiRes qw(time);
 
-our $VERSION = "3.3";
+our $VERSION = "4.0";
 my $name = basename($0);
 
 # Flush to STDOUT as it happens, don't buffer.
 local $| = 1;
-my ($fromfile, $port, $timeout, $debug, $ipv6, $hosts_found, $single_host);
+my ($fromfile, $port, $timeout, $cipher, $debug, $ipv6, $hosts_found, $single_host);
 my $hosts_successful = 0;
 
 wtf() unless @ARGV > 0 or (! -t STDIN);
 GetOptions  ('i|input=s' => \$fromfile,
              'p|port=s' => \$port,
              't|timeout=s' => \$timeout,
+             'c|cipher' => \$cipher,
              'd|debug' => \$debug,
              '6|ipv6' => \$ipv6,
              'vV|version' => sub{ info($VERSION);exit 0; },
@@ -209,7 +211,13 @@ sub poke {
       /22/ && do {
          # Be polite and pass a client hello to sshd
          my $sshclienthello = "SSH-2.0-pport_$VERSION\n";
-         $s_socket->send($sshclienthello);
+         if ( defined(IO::Select->new($s_socket)->can_write($timeout)) ) {
+            $s_socket->send($sshclienthello);
+            if (defined $cipher) {
+               $s_socket_read_length = 1024;
+               @s_fragments = ( 0,1 ); # Read several times from the socket, as response often fragmented
+            }
+         }
          last;
       };
       # By default, say nothing
