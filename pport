@@ -8,7 +8,7 @@
 # 28/08/2014 - TRCM - add timings (v3.2)
 # 12/12/2014 - TRCM - pass an SSH identification string (v3.3)
 #                   - preventing sshd "Did not receive identification string" informational notice
-# 06/01/2015 - TRCM - Add option to do more SSH handshake and get allowed_ciphers (v4.0)
+# 06/01/2015 - TRCM - Add option to do more SSH handshake and get algo exchange (v4.0)
 #
 # TODO: Add a brief mode, printing more tersely with  just 'success/fail'
 # TODO: Can we get any more details from the BladeLogic packets?
@@ -26,14 +26,14 @@ my $name = basename($0);
 
 # Flush to STDOUT as it happens, don't buffer.
 local $| = 1;
-my ($fromfile, $port, $timeout, $cipher, $debug, $ipv6, $hosts_found, $single_host);
+my ($fromfile, $port, $timeout, $algo, $debug, $ipv6, $hosts_found, $single_host);
 my $hosts_successful = 0;
 
 wtf() unless @ARGV > 0 or (! -t STDIN);
 GetOptions  ('i|input=s' => \$fromfile,
              'p|port=s' => \$port,
              't|timeout=s' => \$timeout,
-             'c|cipher' => \$cipher,
+             'a|algo' => \$algo,
              'd|debug' => \$debug,
              '6|ipv6' => \$ipv6,
              'vV|version' => sub{ info($VERSION);exit 0; },
@@ -209,13 +209,15 @@ sub poke {
       };
       # SSH
       /22/ && do {
-         # Be polite and pass a client hello to sshd
+         # Be polite and pass a clienthello to sshd (stealthy, just "Connection closed by n.n.n.n" logged by sshd at DEBUG)
          my $sshclienthello = "SSH-2.0-pport_$VERSION\n";
+         # Alternatively, this makes sshd log "probed from n.n.n.n with SSH-2.0-Probe-pport_4.0.  Don't panic."
+         #my $sshclienthello = "SSH-2.0-Probe-pport_$VERSION\r\n";
          if ( defined(IO::Select->new($s_socket)->can_write($timeout)) ) {
             $s_socket->send($sshclienthello);
-            if (defined $cipher) {
-               $s_socket_read_length = 1024;
-               @s_fragments = ( 0,1 ); # Read several times from the socket, as response often fragmented
+            if (defined $algo) {
+               $s_socket_read_length = 2048;
+               @s_fragments = ( 0,1 ); # Read twice from the socket; client indentification, algorithm exchange.
             }
          }
          last;
@@ -243,6 +245,51 @@ sub grok {
    my $s_response = shift;
    my $s_grok;
    for ($s_response) {
+      if (defined $algo && $port == 22) {
+         # Separate client indentification and algorithm options from concatenated response :
+         # SSH-2.0-OpenSSH_6.7p1®*qÅnÜ{£·È{Nq¡curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1ssh-rsa,ssh-ed25519achacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes128-ctrachacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes128-ctrhmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-512,hmac-sha2-256,hmac-ripemd160hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-512,hmac-sha2-256,hmac-ripemd160none,zlib@openssh.comnone,zlib@openssh.com
+         # Message code of 'Key Exchange Init' is '20' (0x14)
+         # What follows that is 16-bytes of ?cookie?
+         # And then 4-bytes length fields
+         my $length;
+         my $cookie;
+         #my $offset=index($s_response,20);
+         my $offset=29;
+         if ($debug) { print "DEBUG: offset = $offset\n"; }
+         $cookie = unpack "A*", substr($s_response,$offset,16);
+         if ($debug) { printf("DEBUG: cookie = %s\n",hexprint($cookie)) };
+         $offset += 16;
+         $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
+         my $kex = "Key exchange: " . unpack "A*", substr($s_response,$offset,$length);
+         $offset += $length;
+         $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
+         my $hostkey = "Host key: " . unpack "A*", substr($s_response,$offset,$length);
+         $offset += $length;
+         $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
+         my $enc_client = "Encryption (clnt->srv): " . unpack "A*", substr($s_response,$offset,$length);
+         $offset += $length;
+         $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
+         my $enc_server = "Encryption (srv->clnt): " . unpack "A*", substr($s_response,$offset,$length);
+         $offset += $length;
+         $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
+         my $mac_client = "MAC (clnt->srv): " . unpack "A*", substr($s_response,$offset,$length);
+         $offset += $length;
+         $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
+         my $mac_server = "MAC (srv->clnt): " . unpack "A*", substr($s_response,$offset,$length);
+         $offset += $length;
+         $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
+         my $comp_client = "Compression (clnt->srv): " . unpack "A*", substr($s_response,$offset,$length);
+         $offset += $length;
+         $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
+         my $comp_server = "Compression (srv->clnt): " . unpack "A*", substr($s_response,$offset,$length);
+
+         if (($enc_client eq $enc_server) and ($mac_client eq $mac_server) and ($comp_client eq $comp_server)) {
+            $s_grok = sprintf("\n%s\n%s\n%s\n%s\n%s",$kex,$hostkey,$enc_client,$mac_client,$comp_client);
+         } else {
+            $s_grok = sprintf("\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s",$kex,$hostkey,$enc_client,$enc_server,$mac_client,$mac_server,$comp_client,$comp_server);
+         }
+         last;
+      }
       /^Nothing$/                 && do {$s_grok = "Nothing"; last;};
       /^SSH-2.0-Sun_SSH/          && do {$s_grok = "looks like Solaris"; last;};
       /^SSH-2.0-RomSShell_4.62/   && do {$s_grok = "looks like HPILOv3"; last;};
@@ -311,7 +358,8 @@ sub info {
 
 #------------------------------------------------------------------------------
 sub wtf {
-   printf("Usage: %s -dhs6 [-i file] [-p tcp_port] [-t timeout_secs] hostname\n",$name);
+   printf("Usage: %s -dha6 [-i file] [-p tcp_port] [-t timeout_secs] hostname\n",$name);
    exit;
 }
 #------------------------------------------------------------------------------
+
