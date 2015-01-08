@@ -2,6 +2,7 @@
 # 08/10/2013 - TRCM - play nicely when reading multiline stdin from a pipe (v2.9)
 #                   - heed some PerlCritic advice (v2.94)
 #                   - uninitialised value bugs (v2.95)
+# 07/01/2014 - TRCM - (DB) query dbSquared for SATHS
 # 12/02/2014 - TRCM - fix error codes on bad hostnames
 # 02/05/2014 - TRCM - fix host parsing when fed from loop (eg. not stdin)
 # 23/06/2014 - TRCM - add option for IPv6 (v3.1)
@@ -26,14 +27,14 @@ my $name = basename($0);
 
 # Flush to STDOUT as it happens, don't buffer.
 local $| = 1;
-my ($fromfile, $port, $timeout, $algo, $debug, $ipv6, $hosts_found, $single_host);
+my ($fromfile, $port, $timeout, $kex, $debug, $ipv6, $hosts_found, $single_host);
 my $hosts_successful = 0;
 
 wtf() unless @ARGV > 0 or (! -t STDIN);
 GetOptions  ('i|input=s' => \$fromfile,
              'p|port=s' => \$port,
              't|timeout=s' => \$timeout,
-             'a|algo' => \$algo,
+             'k|kex' => \$kex,
              'd|debug' => \$debug,
              '6|ipv6' => \$ipv6,
              'vV|version' => sub{ info($VERSION);exit 0; },
@@ -104,7 +105,7 @@ sub win {
    my ($s_host,$s_elapsed,$s_parsed,$s_raw) = @_;
    if ($debug) {
       binmode(STDOUT, ':encoding(UTF-8)');
-      printf("%s, \e[%dmSuccess\e[m, TCP %d, %.1g sec%s, %s, %s\n",
+      printf("%s, \e[%dmSuccess\e[m, TCP %d, %.1g sec%s, %s\nDEBUG: %s\n",
          $s_host,$s_success_colour,$port,$s_elapsed,$timeout<=1?"":"s",$s_parsed,hex2ascii(hexprint($s_raw)));
    } else {
       if (-t STDOUT) {
@@ -211,11 +212,11 @@ sub poke {
       /22/ && do {
          # Be polite and pass a clienthello to sshd (stealthy, just "Connection closed by n.n.n.n" logged by sshd at DEBUG)
          my $sshclienthello = "SSH-2.0-pport_$VERSION\n";
-         # Alternatively, this makes sshd log "probed from n.n.n.n with SSH-2.0-Probe-pport_4.0.  Don't panic."
+         # Alternatively, this makes sshd log "probed from n.n.n.n with SSH-2.0-Probe-pport_4.0. Don't panic."
          #my $sshclienthello = "SSH-2.0-Probe-pport_$VERSION\r\n";
          if ( defined(IO::Select->new($s_socket)->can_write($timeout)) ) {
             $s_socket->send($sshclienthello);
-            if (defined $algo) {
+            if (defined $kex) {
                $s_socket_read_length = 2048;
                @s_fragments = ( 0,1 ); # Read twice from the socket; client indentification, algorithm exchange.
             }
@@ -245,59 +246,53 @@ sub grok {
    my $s_response = shift;
    my $s_grok;
    for ($s_response) {
-      if (defined $algo && $port == 22) {
-         # Separate client indentification and algorithm options from concatenated response :
-         # SSH-2.0-OpenSSH_6.7p1®*qÅnÜ{£·È{Nq¡curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1ssh-rsa,ssh-ed25519achacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes128-ctrachacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes128-ctrhmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-512,hmac-sha2-256,hmac-ripemd160hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-512,hmac-sha2-256,hmac-ripemd160none,zlib@openssh.comnone,zlib@openssh.com
-         # Message code of 'Key Exchange Init' is '20' (0x14)
-         # What follows that is 16-bytes of ?cookie?
-         # And then 4-bytes length fields
-         my $length;
-         my $cookie;
-         #my $offset=index($s_response,20);
-         my $offset=29;
-         if ($debug) { print "DEBUG: offset = $offset\n"; }
-         $cookie = unpack "A*", substr($s_response,$offset,16);
-         if ($debug) { printf("DEBUG: cookie = %s\n",hexprint($cookie)) };
-         $offset += 16;
+      if (defined $kex && $port == 22) {
+         # Separate client indentification and algorithm options from concatenated response
+         my %algo;
+         my $keyexchangeinit=chr(hex('14'));
+         my $offset=index($s_response,$keyexchangeinit)+1;
+         my $clientid=substr($s_response,0,$offset-7); # umm, seven.
+         my $cookie=unpack "A*", substr($s_response,$offset,16); $offset += 16;
+         my $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
+         $algo{kex} = unpack "A*", substr($s_response,$offset,$length); $offset += $length;
          $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
-         my $kex = "Key exchange: " . unpack "A*", substr($s_response,$offset,$length);
-         $offset += $length;
+         $algo{hostkey} = unpack "A*", substr($s_response,$offset,$length); $offset += $length;
          $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
-         my $hostkey = "Host key: " . unpack "A*", substr($s_response,$offset,$length);
-         $offset += $length;
+         $algo{enc1} = unpack "A*", substr($s_response,$offset,$length); $offset += $length;
          $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
-         my $enc_client = "Encryption (clnt->srv): " . unpack "A*", substr($s_response,$offset,$length);
-         $offset += $length;
+         $algo{enc2} = unpack "A*", substr($s_response,$offset,$length); $offset += $length;
          $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
-         my $enc_server = "Encryption (srv->clnt): " . unpack "A*", substr($s_response,$offset,$length);
-         $offset += $length;
+         $algo{mac1} = unpack "A*", substr($s_response,$offset,$length); $offset += $length;
          $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
-         my $mac_client = "MAC (clnt->srv): " . unpack "A*", substr($s_response,$offset,$length);
-         $offset += $length;
+         $algo{mac2} = unpack "A*", substr($s_response,$offset,$length); $offset += $length;
          $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
-         my $mac_server = "MAC (srv->clnt): " . unpack "A*", substr($s_response,$offset,$length);
-         $offset += $length;
+         $algo{comp1} = unpack "A*", substr($s_response,$offset,$length); $offset += $length;
          $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
-         my $comp_client = "Compression (clnt->srv): " . unpack "A*", substr($s_response,$offset,$length);
-         $offset += $length;
+         $algo{comp2} = unpack "A*", substr($s_response,$offset,$length); $offset += $length;
          $length = unpack "N", substr($s_response,$offset,4); $offset += 4;
-         my $comp_server = "Compression (srv->clnt): " . unpack "A*", substr($s_response,$offset,$length);
+         $algo{lang} = unpack "A*", substr($s_response,$offset,$length);
 
-         if (($enc_client eq $enc_server) and ($mac_client eq $mac_server) and ($comp_client eq $comp_server)) {
-            $s_grok = sprintf("\n%s\n%s\n%s\n%s\n%s",$kex,$hostkey,$enc_client,$mac_client,$comp_client);
+         # We like spaces
+         foreach my $key (keys %algo) {
+            $algo{$key} =~ s/,/,\ /g;
+         }
+
+         # If client and server algorithms are the same, just print the set once
+         if (($algo{enc1} eq $algo{enc2}) and ($algo{mac1} eq $algo{mac2}) and ($algo{comp1} eq $algo{comp2})) {
+            $s_grok = sprintf("$clientid\nKey exchange   : %s\nHost key types : %s\nEncryption     : %s\nIntegrity      : %s\nCompression    : %s\n",$algo{kex},$algo{hostkey},$algo{enc1},$algo{mac1},$algo{comp1});
          } else {
-            $s_grok = sprintf("\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s",$kex,$hostkey,$enc_client,$enc_server,$mac_client,$mac_server,$comp_client,$comp_server);
+            $s_grok = sprintf("$clientid\nKey exchange: %s\nHost key types: %s\nEncryption (clnt->srv): %s\nEncryption (srv->clnt): %s\nIntegrity (clnt->srv): %s\nIntegrity (srv->clnt): %s\nCompression (clnt->srv): %s\nCompression (srv->clnt): %s",$algo{kex},$algo{hostkey},$algo{enc1},$algo{enc2},$algo{mac1},$algo{mac2},$algo{comp1},$algo{comp2});
          }
          last;
       }
       /^Nothing$/                 && do {$s_grok = "Nothing"; last;};
-      /^SSH-2.0-Sun_SSH/          && do {$s_grok = "looks like Solaris"; last;};
-      /^SSH-2.0-RomSShell_4.62/   && do {$s_grok = "looks like HPILOv3"; last;};
-      /^SSH-2.0-mpSSH_0.1.1/      && do {$s_grok = "looks like HPILOv2"; last;};
-      /^SSH-2.0-mpSSH_0.1.0/      && do {$s_grok = "looks like HPILOv2"; last;};
-      /^SSH-2.0-mpSSH_0.0.1/      && do {$s_grok = "looks like HPILOv1"; last;};
-      /^SSH-2.0-OpenSSH_OA/       && do {$s_grok = "looks like HP-OA"; last;};
-      /^SSH-2.0-IPSSH-1.10.0/     && do {$s_grok = "looks like HPLO-100"; last;};
+      #/^SSH-2.0-Sun_SSH/          && do {$s_grok = "looks like Solaris"; last;};
+      #/^SSH-2.0-RomSShell_4.62/   && do {$s_grok = "looks like HPILOv3"; last;};
+      #/^SSH-2.0-mpSSH_0.1.1/      && do {$s_grok = "looks like HPILOv2"; last;};
+      #/^SSH-2.0-mpSSH_0.1.0/      && do {$s_grok = "looks like HPILOv2"; last;};
+      #/^SSH-2.0-mpSSH_0.0.1/      && do {$s_grok = "looks like HPILOv1"; last;};
+      #/^SSH-2.0-OpenSSH_OA/       && do {$s_grok = "looks like HP-OA"; last;};
+      #/^SSH-2.0-IPSSH-1.10.0/     && do {$s_grok = "looks like HPLO-100"; last;};
       # These are good for HTTP parsing
       /Server: /                  && do {m/Server: (.+)/; $s_grok=(defined $1)?$1:""; last;};
       /title/                     && do {m/title>[\r\n]*(.+?)<\/title/sg; $s_grok=(defined $1)?$1:""; last;};
@@ -358,8 +353,7 @@ sub info {
 
 #------------------------------------------------------------------------------
 sub wtf {
-   printf("Usage: %s -dha6 [-i file] [-p tcp_port] [-t timeout_secs] hostname\n",$name);
+   printf("Usage: %s -dhk6 [-i file] [-p tcp_port] [-t timeout_secs] hostname\n",$name);
    exit;
 }
-#------------------------------------------------------------------------------
 
