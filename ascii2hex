@@ -1,7 +1,19 @@
-#!/usr/bin/perl
+#!/usr/bin/perl -CSD
 # 2013 - TRCM
+# Assumes UTF8
+#
+# '-CSD' enables Unicode(UTF-8) handling of STDIN,STDOUT,STDERR and input / output streams
+#use utf8;
+#binmode(STDOUT, ":utf8");
+
 my $text = join(' ',@ARGV);
 
-print "STRING - " . join("",unpack("A*",$text) =~ m/(.)/g ) . "\n";
-print "ASCII  - " . join("  ",unpack("A*",$text) =~ m/(.)/g ) . "\n";
-print "HEX    - " . join(":",unpack("H*",$text) =~ m/(..)/g ) ."\n";
+if (@ARGV eq 0) {
+   foreach my $char (33..256) {
+      printf("dec=%03d : hex=%X : char=%c\n",$char,$char,$char);
+   }
+} else {
+   printf ("DEC    - %03d\n",unpack(U,$text));
+   printf ("HEX    - %s\n",join(":",unpack("H*",$text) =~ m/(..)/g));
+   printf ("ASCII  - %s\n",join("  ",unpack("A*",$text) =~ m/(.)/g));
+}
