@@ -1,0 +1,26 @@
+#!/usr/bin/perl -n -00
+# 16/02/2015 - TRCM - Extract links from HTML
+
+while ( m{          # match repeatedly with /g
+   < \s* A .*?      # this is an anchor
+        \s+ HREF    # a link spec
+        \s* = \s*   # here comes the link
+        ( ["'] )    # either quote, saved in $1
+                    # and \1
+       ( .*? )      # the whole link, saved in $2
+         \1         # the original $1 quote
+       .*? >        # the rest of the tag
+         }xsgi)     # /x for expanded patterns
+                    # /s so . can match \n
+                    # /g to get multiple hits
+                    # in one paragraph
+                    # /i for case insensitivity
+                    # on A and HREF
+{
+      print "$2\n";
+}
+
+# Which in the nasty long line version reads...
+#while ( /<\s*A.*?\s+HREF\s*=\s*(["'])(.*?)\1.*?>/gi ) {
+#       print "$2\n";
+#}
