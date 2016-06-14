@@ -1,0 +1,172 @@
+#!/usr/bin/env perl
+# 20150706 - TRCM - Grok the passwd and group server namespaces
+# 20150707 - TRCM - Wrap the routines in some friendly bits
+# 20150708 - TRCM - Added group password reporting
+#                 - Added check against /etc/shells
+#                 - Added check against existant home directory
+#                 - bugfix for negative gids on OSX
+#
+# FIXME - OSX Support incomplete
+# TODO - Rename found duplicate entries as name(duplicate)?
+# TODO - Can we early exit in getgroups?
+use Data::Dumper;
+use strict;
+use warnings;
+use File::Basename qw(basename);
+use Getopt::Long qw(:config no_ignore_case);
+#-------------------------------------------------------------------------------
+our $VERSION = "1.2";
+my $filename = basename($0);
+my ($user, $group, $dumpusers, $dumpgroups);
+# FIXME - Could better use IO::Interactive:is_interactive()
+my $shells = (-r "/etc/shells")?"/etc/shells":undef;
+my %okshell;
+#-------------------------------------------------------------------------------
+wtf() unless @ARGV > 0 or (! -t STDIN);
+GetOptions  ('u|user=s' => \$user,
+             'g|group=s' => \$group,
+             'U|dumpusers' => \$dumpusers,
+             'G|dumpgroups' => \$dumpgroups,
+             'v|version' => sub{ info($VERSION);exit 0; },
+             'h|help|?' => sub{ info($VERSION);wtf(); },
+) or wtf();
+#-------------------------------------------------------------------------------
+if ($user) {
+    shellchk() if ($shells);
+    my $users = getusers($user);
+    if (exists $users->{$user}) {
+        my $home=(-d $users->{$user}->{'home'})
+            ?$users->{$user}->{'home'}
+            :"BAD_HOME($users->{$user}->{'home'})";
+        my $shell=(exists $okshell{$users->{$user}->{'shell'}})
+            ?$users->{$user}->{'shell'}
+            :"BAD_SHELL($users->{$user}->{'shell'})";
+        printf("uid=%hd(%s) gid=%hd(%s) shell=%s home=%s groups=%s\n"
+                  ,scalar getpwnam($user)
+                  ,$user
+                  ,$users->{$user}->{'gid'}
+                  ,scalar getgrgid($users->{$user}->{'gid'})
+                  ,$shell
+                  ,$home
+                  ,join(",",sort {lc $a cmp lc $b} keys %{$users->{$user}->{'groups'}}));
+    } else {
+        print"$filename: invalid user name: \"$user\"\n";
+    }
+} elsif ($group) {
+    my $gid=getgrnam($group);
+    my $groups = getgroups();
+    no warnings 'uninitialized';
+    if (exists $groups->{$gid}) {
+        printf("%s:%s:%hd:%s\n"
+                  ,$group
+                  ,$groups->{$gid}->{'pw'},
+                  ,$gid
+                  ,join(",",sort {lc $a cmp lc $b} keys %{$groups->{$gid}->{'users'}}));
+    } else {
+        print"$filename: invalid group name: \"$group\"\n";
+    }
+} elsif ($dumpusers) {
+    shellchk() if ($shells);
+    my $users = getusers();
+    for my $user (sort {lc $a cmp lc $b} keys %$users) {
+        my $home=(-d $users->{$user}->{'home'})
+            ?$users->{$user}->{'home'}
+            :"BAD_HOME($users->{$user}->{'home'})";
+        my $shell=(exists $okshell{$users->{$user}->{'shell'}})
+            ?$users->{$user}->{'shell'}
+            :"BAD_SHELL($users->{$user}->{'shell'})";
+        printf("%s:%hd:%hd:%s:%s:%s\n"
+                  ,$user
+                  ,$users->{$user}->{'uid'}
+                  ,$users->{$user}->{'gid'}
+                  ,$shell
+                  ,$home
+                  ,join(",",sort {lc $a cmp lc $b} keys %{$users->{$user}->{'groups'}}));
+    }
+} elsif ($dumpgroups) {
+    my $groups = getgroups();
+    foreach my $gid (sort {lc $groups->{$a}->{'name'} cmp lc $groups->{$b}->{'name'}} keys %$groups) {
+        printf "%s:%hd:%s\n"
+                  ,$groups->{$gid}->{'name'}
+                  ,$gid
+                  ,join(",",sort {lc $a cmp lc $b} keys %{$groups->{$gid}->{'users'}});
+    }
+}
+#-------------------------------------------------------------------------------
+sub getusers{
+    my $user=shift;
+    my %users=();
+    my @allusers;
+    no warnings 'closure';
+    sub assign {
+        # Match just the first entry found, as per nsswitch.conf lookup order
+        if (not exists($users{$allusers[0]})) {
+            $users{$allusers[0]}{'uid'}=$allusers[2];
+            $users{$allusers[0]}{'gid'}=$allusers[3];
+            $users{$allusers[0]}{'home'}=$allusers[7];
+            $users{$allusers[0]}{'shell'}=$allusers[8];
+        # Populate group list with primary GID
+            my $gidname=defined(getgrgid($allusers[3]))?getgrgid($allusers[3]):"n/a";
+            $users{$allusers[0]}{'groups'}{$gidname}++;
+            #$users{$allusers[0]}{'groups'}{getgrgid($allusers[3])}++;
+        }
+        # Append to group list with secondary GIDs
+        while (my @allgroups=getgrent) {
+            next if ($allgroups[3] eq "");
+            map {
+                $users{$_}{'groups'}{$allgroups[0]}++ if exists $users{$_};
+            } split(/ /, $allgroups[3]);
+        }
+    }
+    if ($user) {
+        @allusers=getpwnam($user);
+        return \%users unless (@allusers);
+        assign;
+    } else {
+        while (@allusers=getpwent) { assign };
+    }
+    return \%users;
+}
+#-------------------------------------------------------------------------------
+sub getgroups {
+    my %groups=();
+    # Populate the group list with secondary group users
+    while (@_=getgrent) {
+        if (not exists($groups{$_[2]})) {
+            $groups{$_[2]}{'name'}=defined($_[0])?$_[0]:"n/a";
+            $groups{$_[2]}{'pw'}=$_[1];
+            map {$groups{$_[2]}{'users'}{$_}++} split(/ /, $_[3]);
+        } else {
+            map {$groups{$_[2]}{'users'}{$_}++} split(/ /, $_[3]);
+        }
+    }
+    # Append the primary group members
+    while (@_=getpwent) {
+        if (not exists($groups{$_[3]})) {
+            $groups{$_[3]}{'name'}=defined(getgrgid($_[3]))?getgrgid($_[3]):"n/a";
+            $groups{$_[3]}{'users'}{$_[0]}++;
+        } else {
+            $groups{$_[3]}{'users'}{$_[0]}++;
+        }
+    }
+    return \%groups;
+}
+#-------------------------------------------------------------------------------
+sub shellchk {
+    open (SHELLS,$shells) or die "Couldn't read $shells:$!\n";
+    while(<SHELLS>){
+        chomp; $okshell{$_}++;
+    }
+    close (SHELLS);
+}
+#-------------------------------------------------------------------------------
+sub wtf {
+   printf("Usage: %s [ -U | -dumpusers ] [ -G | -dumpgroups ] [-u username] [-g groupname]\n",$filename);
+   exit;
+}
+#-------------------------------------------------------------------------------
+sub info {
+   my $version = shift;
+   printf("\e[%dm%s\e[m - %s  (PERL v%vd)\n",33,$filename,$version,$^V);
+   return;
+}
