@@ -1,0 +1,50 @@
+#!/bin/bash
+# Setup some SSH tunnel port forwards for when access to email is blocked
+# in some remote office locations.
+
+if id|grep root 2>&1 >/dev/null; then
+    true
+else
+    echo " ! Must run as root for priv-port forwarding";
+    exit 1
+fi
+
+THOST="remote_tunnel_hostname"  # Your home router / raspberry pi / etc.
+TPORT=22                        # The SSH port it's listening on
+TUSER="remote_tunnel_user"      # The user you'll login with
+TKEY="/path/to/.ssh/id_ed25519" # The path to the key you'll be using
+TFORWARDS=(
+    '-L127.0.0.1:587:smtp.gmail.com:587'
+    '-L127.0.0.1:993:imap.gmail.com:993'
+    '-L127.0.0.2:587:mail.example.org:587'
+    '-L127.0.0.2:993:mail.example.org:993'
+)
+TREDIRECTS=(
+    '127.0.0.1 smtp.gmail.com imap.gmail.com # TEMP_TUNNEL_REDIRECT'
+    '127.0.0.2 mail.example.org # TEMP_TUNNEL_REDIRECT'
+)
+
+function need_cleanup {
+    # Remove the localhost redirections
+    echo -e "\r - Removing localhost redirects from /etc/hosts"
+    perl -n -i -e '/TEMP_TUNNEL_REDIRECT$/ || print' /etc/hosts
+    echo " - Removing additional loopback IP alias from /dev/lo0"
+    ifconfig lo0 -alias 127.0.0.2
+}
+
+trap 'exit 0' SIGHUP SIGINT SIGTERM
+
+echo " + Adding localhost redirects to /etc/hosts"
+trap need_cleanup EXIT
+for redirect in "${TREDIRECTS[@]}"; do
+    echo ${redirect} >> /etc/hosts
+done
+
+echo " + Configuring additional loopback IP alias to /dev/lo0"
+ifconfig lo0 alias 127.0.0.2
+
+echo " + Opening SSH tunneled port forwarding to [$THOST:$TPORT] for..."
+for f in "${TFORWARDS[@]}";do
+    echo "   '$f'"
+done
+ssh -a -4 -k -x -N -l $TUSER -i $TKEY -p $TPORT $THOST $(for f in "${TFORWARDS[@]}";do echo ${f};done) 2>/dev/null
