@@ -1,0 +1,53 @@
+#!/bin/bash
+# Get number of days since last ZFS pool scrub
+# 2016/09/18 - TRCM
+
+#eg.
+#  scan: scrub in progress since Sun Sep 18 11:31:49 2016
+#  scan: scrub repaired 0 in 0h0m with 0 errors on Sun Sep 11 00:24:11 2016
+#  scan: resilvered 674G in 2h30m with 0 errors on Sun Sep 11 15:22:54 2016
+
+pools=$(zpool list -Ho name)
+printf "%-12s %-10s %-6s %-5s\n" POOL STATUS ERRORS "LAST SCRUBBED (days)"
+for pool in $pools; do
+    zpool status $pool | awk '
+            BEGIN {
+                state="unknown";
+                inprogress=0;
+                errors=0;
+                r_error=0; # future use
+                w_error=0; # future use
+                c_error=0; # future use
+                scrubdate=0;
+                scrubtime=0
+            }
+            /^[\ ]+state:/ {
+                state=$2
+            }
+            /^[\ ]+scan:/ {
+                {scrubdate=$(NF-2)"-"$(NF-3)"-"$NF}
+                {scrubtime=$(NF-1)}
+                for(i=1;i<(NF-3);i++) {
+                    found=match($i, /errors/)
+                    if(found) {
+                        errors=$(i-1)
+                    }
+                }
+                for(i=1;i<(NF-3);i++) {
+                    found=match($i, /progress/)
+                    if(found) {
+                        inprogress="1"
+                    }
+                }
+            }
+            END {
+                print state,inprogress,errors,scrubdate,scrubtime
+            }
+        ' | while read state inprogress errors scrubdate scrubtime; do
+        scrubTS="$(date --date="$scrubdate $scrubtime" '+%s')"
+        currentTS="$(date "+%s")"
+        scrubage=$((((currentTS - scrubTS) + 43200) / 86400))
+        if [ "$inprogress" -eq 1 ];then state="SCRUBBING"; fi
+        printf "%-12s %-10s %-6s %-5s\n" $pool $state $errors $scrubage
+        done
+done
