@@ -18,7 +18,7 @@
 # 4.1 TODO
 # my $rc = eval {
 #     require IO::Socket::INET6;
-#     IO::Socket::INET->import();
+#     IO::Socket::INET->import('socket');
 #     1;
 # };
 # if ($rc) {
