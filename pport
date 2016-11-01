@@ -10,9 +10,22 @@
 # 12/12/2014 - TRCM - pass an SSH identification string (v3.3)
 #                   - preventing sshd "Did not receive identification string" informational notice
 # 06/01/2015 - TRCM - Add option to do more SSH handshake and get algo exchange (v4.0)
+# 01/11/2016 - TRCM - Gracefully handle IPv6 PERL support (v4.1)
 #
 # TODO: Add a brief mode, printing more tersely with  just 'success/fail'
 # TODO: Can we get any more details from the BladeLogic packets?
+
+# 4.1 TODO
+# my $rc = eval {
+#     require IO::Socket::INET6;
+#     IO::Socket::INET->import();
+#     1;
+# };
+# if ($rc) {
+#     # IPv6 support available, do stuff here
+# } else {
+#     # Module not available, compensate.
+# }
 
 use strict;
 use warnings;
