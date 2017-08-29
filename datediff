@@ -10,6 +10,7 @@ use strict;
 use Time::Piece;
 
 if ($#ARGV+1 < 2) { die("Supply two dates in YYYY/mm/dd format.\n") }
+my ($diff, $dateA, $dateB);
 
 # Time::Piece will complain about bad strings to STDERR
 # Catch any such complaints and provide our nicer error message
@@ -17,16 +18,13 @@ eval {
     my $time_piece_sucks;
     local *STDERR;
     open STDERR, '>', \$time_piece_sucks;
-    Time::Piece->strptime($ARGV[0], "%Y/%m/%d");
-    Time::Piece->strptime($ARGV[1], "%Y/%m/%d");
+    $dateA = Time::Piece->strptime($ARGV[0], "%Y/%m/%d");
+    $dateB = Time::Piece->strptime($ARGV[1], "%Y/%m/%d");
     die if ($time_piece_sucks);
     1; # lets return true if strptime didnt kill us
 } or do {
     die ("Supply two dates in YYYY/mm/dd format.\n");
 };
-my $dateA = Time::Piece->strptime($ARGV[0], "%Y/%m/%d");
-my $dateB = Time::Piece->strptime($ARGV[1], "%Y/%m/%d");
-my $diff;
 
 if ( $dateA != $dateB ) {
     $diff=$dateB-$dateA;
