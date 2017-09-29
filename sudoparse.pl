@@ -26,9 +26,6 @@
 #                   - Record and print the '## GBLVER:' if we find it.
 #                   - Record any #include lines if we find them.
 #
-# NB. Expected sudoers syntactical variations are in final __END__ section.
-#     Maybe we should lookup the Global Standards for the latest GBLVER 14.0.2 ?
-#
 # TODO Sudo Analysis ----------------------------------------------------------
 # TODO - Could we compare SHA1 of each GLOBAL section, against known good? (-c&!-i?)
 # TODO - Parse 'Defaults' and '#include*' into separate always-print blocks?
