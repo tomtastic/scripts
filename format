@@ -1,1 +1,47 @@
 #!/usr/bin/perl
+# 2017/10/12 - TRCM - is using format slower that printf'ing?
+#                   - who knows, but it's sure prettier.
+
+format report_TOP =
+                     A report (page @##, @### l/p)
+$%,  $=Name                userid   place    group      another
+------------------------------------------------------------------------------
+.
+
+format report =
+@<<<<<<<<<<<<<<<<<<<@0###   @<<<<<<<<<@>>>>>>>  ^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$name,              $uid,   $place,   $group,    $thing
+~~                                              ^<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+                                                 $thing
+.
+
+my $lines_per_page = (scalar @ENV{qw{LINES}}) ? $ENV{'LINES'} : `tput lines`;
+
+for (my $i=0; $i<200; $i++) {
+    $name = "name$i";
+    $uid = $i;
+    $place = "place$i";
+    $group = "group$i";
+    $thing = "lots of text, more text, still text, tonnes of text, too much, text!";
+    #$thing = "some text";
+    local $~ = 'report';
+    local $^ = 'report_TOP';
+    local $= = $lines_per_page;
+    write;
+}
+
+__END__
+# field - The field is blanked out even if value is undefined.
+<  |  > - Left, center and right justified fields respectively.
+@       - substitute argument
+^       - substitute multi-line argument (just repeat ^).
+~       - supress lines with all fields empty
+~~      - repeat line until all fields are exhausted
+0       - pad number with leading zeros
+#       - pad right justified numeric field
+
+Related variables :
+$~ ($FORMAT_NAME)
+$^ ($FORMAT_TOP_NAME) - The current top-of-form format name
+$% ($FORMAT_PAGE_NUMBER) - The current output page number
+$= ($FORMAT_LINES_PER_PAGE) - The number of lines to format per page
