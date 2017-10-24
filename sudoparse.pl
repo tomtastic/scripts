@@ -10,6 +10,8 @@
 #                   - Stop processing remainder of file once all wanted servers are found
 #                   - option to suppress comments
 #                   - always remove blank lines
+#                   - when parsing for all servers, output as CSV (using € delimiter)
+#                     servername , sudo_block , sudo_line
 #                   - sub-block matching regex updated to #{3,5}
 # 2017/09/27 - TRCM - Gather global rule set version numbers.
 #                   - Fix bug where choosing orphaned block would print all lines.
@@ -36,6 +38,10 @@
 # 2017/10/10 - TRCM - Split commands on comma, only when not bracketed.
 #                   - Moved printing to subroutines where possible
 # 2017/10/16 - TRCM - Fix bug - RunAs username can include '_'.
+# 2017/10/17 - TRCM - Include Cmnd_Alias name in command list expansion
+#                   - Refactor Cmnd_Aliases, so they're colleced globally, not per block
+#                   - Expand into Cmnd_Alias, eg.
+#                     Cmnd_Alias COM_BASICOS_R=LS, CAT, TAIL, GREP, DU, DF, HEAD
 #
 # TODO Sudo Analysis ----------------------------------------------------------
 # TODO - Parse 'Defaults' and '#include' into separate always-print blocks?
@@ -49,11 +55,10 @@
 #
 use strict;
 use warnings;
-# TODO Move recursion disable statement into affected block.
 no warnings 'recursion'; # Often recurse >100 times whilst join_backslashed()
 use Data::Dumper;
 use Getopt::Long;
-our $VERSION = "0.961";
+our $VERSION = "0.97";
 my $name = __FILE__; $name =~ s/.*\///;
 #------------------------------------------------------------------------------
 # Regex matching for sudoers block separators
@@ -164,9 +169,10 @@ sub print_specs_one_server_block {
                     $eachcmd = trim($eachcmd);
                     # Is this command an alias?
                     if ($eachcmd =~ /^[A-Z0-9_]+$/) {
-                        if (exists $hash_ref->{$$server_ref}{'PARSED'}{$$block_ref}{'Cmnd_Alias'}{$eachcmd}) {
-                            foreach my $subeachcmd (@{$hash_ref->{$$server_ref}{'PARSED'}{$$block_ref}{'Cmnd_Alias'}{$eachcmd}}) {
-                                print("$$server_ref,$$block_ref,$user,$host,$runas,$modifiers$subeachcmd\n");
+                        # We're a command alias, lets let the user know
+                        if (exists $hash_ref->{$$server_ref}{'Cmnd_Alias'}{$eachcmd}) {
+                            foreach my $subeachcmd (@{$hash_ref->{$$server_ref}{'Cmnd_Alias'}{$eachcmd}}) {
+                                print("$$server_ref,$$block_ref,$user,$host,$runas,[$eachcmd]$modifiers$subeachcmd\n");
                             }
                         } else {
                             print("$$server_ref,$$block_ref,$user,$host,$runas,$modifiers$eachcmd\n");
@@ -331,15 +337,15 @@ sub parse_raw {
                 push (@{$hash{$server}{'SUDO'}{$block_name}}, $_);
             # Step 2, parse the alias or spec lines, adding to hash
                 if (defined($wantcommands)) {
-                    # Only if we supplied the '-c' argument...
+                    # Only if we supplied the '-c' argument to break down Specs
                     if (s/^\s*User_Alias\s+//) {
-                        $hash{$server}{'PARSED'}{$block_name}->{'User_Alias'} = parse_alias($_,$hash{$server}{'PARSED'}{$block_name}->{'User_Alias'});
+                        $hash{$server}->{'User_Alias'} = parse_user_alias($_,$hash{$server}->{'User_Alias'});
                     } elsif (s/^\s*Cmnd_Alias\s+//) {
-                        $hash{$server}{'PARSED'}{$block_name}->{'Cmnd_Alias'} = parse_alias($_,$hash{$server}{'PARSED'}{$block_name}->{'Cmnd_Alias'});
+                        $hash{$server}->{'Cmnd_Alias'} = parse_cmnd_alias($_,$hash{$server}->{'Cmnd_Alias'});
                     } elsif (s/^\s*Host_Alias\s+//) {
-                    #    $hash{$server}{'PARSED'}->{'Host_Alias'} = parse_alias($_,$hash{$server}{'PARSED'}->{'Host_Alias'});
+                    #    $hash{$server}->{'Host_Alias'} = parse_alias($_,$hash{$server}->{'Host_Alias'});
                     } elsif (s/^\s*Runas_Alias\s+//) {
-                    #    $hash{$server}{'PARSED'}->{'Runas_Alias'} = parse_alias($_,$hash{$server}{'PARSED'}->{'Runas_Alias'});
+                    #    $hash{$server}->{'Runas_Alias'} = parse_alias($_,$hash{$server}->{'Runas_Alias'});
                     } elsif (m/^\s*\S+\s+\S+\s*=\s*\S+/) {
                         if (m/Default/) {
                             print "[?] DEBUG: Erroneously matched a defaults line : $_\n" if ($debug);
@@ -358,13 +364,13 @@ sub parse_raw {
             if (defined($wantcommands)) {
                 # Only if we supplied the '-c' argument...
                 if (s/^\s*User_Alias\s+//) {
-                    $hash{$server}{'PARSED'}{'ORPHANED'}->{'User_Alias'} = parse_alias($_,$hash{$server}{'PARSED'}{'ORPHANED'}->{'User_Alias'});
+                    $hash{$server}->{'User_Alias'} = parse_user_alias($_,$hash{$server}->{'User_Alias'});
                 } elsif (s/^\s*Cmnd_Alias\s+//) {
-                    $hash{$server}{'PARSED'}{'ORPHANED'}->{'Cmnd_Alias'} = parse_alias($_,$hash{$server}{'PARSED'}{'ORPHANED'}->{'Cmnd_Alias'});
+                    $hash{$server}->{'Cmnd_Alias'} = parse_cmnd_alias($_,$hash{$server}->{'Cmnd_Alias'});
                 } elsif (s/^\s*Host_Alias\s+//) {
-                #    $hash{$server}{'PARSED'}{'ORPHANED'}->{'Host_Alias'} = parse_alias($_,$hash{$server}{'PARSED'}{'ORPHANED'}->{'Host_Alias'});
+                #    $hash{$server}->{'Host_Alias'} = parse_alias($_,$hash{$server}->{'Host_Alias'});
                 } elsif (s/^\s*Runas_Alias\s+//) {
-                #    $hash{$server}{'PARSED'}{'ORPHANED'}->{'Runas_Alias'} = parse_alias($_,$hash{$server}{'PARSED'}{'ORPHANED'}->{'Runas_Alias'});
+                #    $hash{$server}->{'Runas_Alias'} = parse_alias($_,$hash{$server}->{'Runas_Alias'});
                 } elsif (m/^\s*\S+\s+\S+\s*=\s*\S+/) {
                     if (m/Default/) {
                         print "[?] DEBUG: Erroneously matched a defaults line : $_\n" if ($debug);
@@ -388,15 +394,41 @@ sub parse_raw {
     }
     # Once we've parsed the whole server block, discard the RAW data
     delete $hash{$server}{'RAW'};
+    # I'm making a note here, great success
+    #$hash{$server}{'PARSED'}++;
     return;
 }
 #------------------------------------------------------------------------------
-sub parse_alias {
+sub parse_user_alias {
     my ($line,$alias) = @_;
     $line = trim($line);
     my ($name,$raw_value) = split(/\s*=\s*/,$line,2);
     my @values = split(/\s*,\s*/,$raw_value);
     $alias->{$name} = \@values;
+    return $alias;
+}
+#------------------------------------------------------------------------------
+sub parse_cmnd_alias {
+    my ($line,$alias) = @_;
+    $line = trim($line);
+    my ($name,$raw_value) = split(/\s*=\s*/,$line,2);
+    my @values = split(/\s*,\s*/,$raw_value);
+    #FIXME Alias must be defined before use, so we can safely expand as we go
+    #Cmnd_Alias COM_BASICOS_R=cat, LS, more, GREP, DU, DF, HEAD
+    foreach my $command (@values) {
+        if ($command =~ m/^[A-Z0-9_]+$/) {
+            if (exists($alias->{$command})) {
+                push (@{$alias->{$name}}, @{$alias->{$command}});
+            } else {
+                # Weird, we haven't seen this Cmnd_Alias name before?!
+                # Can't expand, so just add it to the list.
+                push (@{$alias->{$name}}, $command);
+            }
+        } else {
+            push (@{$alias->{$name}}, $command);
+        }
+    }
+    #$alias->{$name} = \@values;
     return $alias;
 }
 #------------------------------------------------------------------------------
@@ -418,21 +450,6 @@ sub parse_spec {
     }
     return $spec;
 }
-#------------------------------------------------------------------------------
-sub expand_cmnd_alias {
-    my ($command,$hash) = @_;
-    my $temp;
-    my $cmnd_alias = $hash->{'Cmnd_Alias'}{$command};
-    foreach my $command (@{$cmnd_alias}) {
-        if ($command =~ /^[A-Z0-9_]+$/) {
-            $temp->{$command} = expand_cmnd_alias($command,$hash);
-        } else {
-            $temp->{$command} = undef;
-        }
-    }
-    return $temp;
-}
-#------------------------------------------------------------------------------
 sub trim {
     my $s_string = shift;
     $s_string =~ s/^\s+|\s+$//g;
@@ -483,4 +500,13 @@ sub wtf {
     exit;
 }
 #------------------------------------------------------------------------------
+　
 __END__
+　
+Our in-memory data structure is :
+　
+%hash -> $server -> @'RAW'                   (The raw data)
+%hash -> $server -> 'SUDO'   -> @BLOCK_n     (The parsed blocks)
+%hash -> $server -> $GBLVER                  (Global version)
+%hash -> $server -> $INCLUDE                 (Disallowed #include found)
+$hash -> $server -> 'PARSED' -> @Cmnd_Alias  (The commands)  #FIXME ??
