@@ -1,98 +1,123 @@
 #!/usr/bin/env perl
 # 16/12/2014 - TRCM - Identify the longest common prefix
 # 26/10/2017 - TRCM - Dont compare beyond the length of shortest string
-# TODO : allow passing arbmax and filename  via getops
+#                   - Sort the input before doing any comparison
+#                   - Determine largest common prefix grouping
 use strict;
 use warnings;
+　
 # Set to something for information on the scoring values
 my $debug;
+　
 # experiment with limiting score for larger groupings
-my $arbmax=6;
+my $arbmax = 4;
+　
+# colourise longest common prefix
+my $text_attr = 0;     # 0:off,1:bold,4:underscore,5:blink,7:reverse,8:conceal
+my $text_fg   = 33;    # 30:blk,31:red,32:grn,33:yel,34:blu,35:mag,36:cyn,37:wht
+my $text_bg   = 40;    # fg + 10
+　
+#-------------------------------------------------------------------
+my $fh;
+my $pos = 0;
+　
+if ( defined( $ARGV[0] ) and $ARGV[0] ne "-t" ) {
+    my $inputfile = $ARGV[0];
+    open( $fh, "<", $inputfile ) or die "$!\n";
+    if ( defined( $ARGV[1] ) ) {
+        $arbmax = $ARGV[1];
+    }
+}
+else {
+    # Use example __DATA__
+    if ( defined( $ARGV[1] ) ) {
+        $arbmax = $ARGV[1];
+    }
+    $fh = do { local (*FH); \*FH };
+    open( $fh, "<&DATA" ) or die "$!\n";
+    $pos = tell DATA;
+}
+　
+#-------------------------------------------------------------------
+my @data = map { chomp; $_ } <$fh>;
+my $line_last  = "";
+my $score      = 0;
+my $score_last = 0;
+my @buckets;
+my $bucket_num = 0;
+my $line_counter = 0;
+　
+@data = sort @data;
+my $lcp = longest_common_prefix(@data);
+　
+foreach my $line (@data) {
+    chomp $line;
+    $score = lcp_score( $line_last, $line );
+    $score = $arbmax ? ( $score >= $arbmax ) : $score;
+    if ( $score == 0 || $score < $score_last ) {
+        # Create a new bucket index
+        $bucket_num++ unless $line_counter == 0;    # Dont skip index of 0 pls.
+        $buckets[$bucket_num] = [$line];
+    }
+    else {
+        # Append to the existing bucket index
+        push @{ $buckets[$bucket_num] }, $line;
+    }
+    $score_last = $score;
+    $line_last  = $line;
+    $line_counter++;
+}
+　
+#-------------------------------------------------------------------
+# Sort then print the AoA by reverse bucket size, remembering the largest
+my $largest_bucket;
+foreach my $words ( sort { @$b <=> @$a } @buckets ) {
+    $largest_bucket = scalar @$words unless defined($largest_bucket);
+    if ( -t STDOUT ) {
+        # Highlight the lcp part of the word if STDOUT is interactive
+        foreach my $word (@$words) {
+            $word =~ s/^$lcp/\e[$text_attr;$text_fg;${text_bg}m$lcp\e[0m/;
+            print "$word\n";
+        }
+    }
+    else {
+        foreach my $word (@$words) {
+            print "$word\n";
+        }
+    }
+    print "\n";
+}
+　
+#-------------------------------------------------------------------
+printf( "<I> Prefix groupings length cap : %d chars\n", $arbmax );
+printf( "<I> Prefix groupings found      : %d groups\n", $bucket_num + 1 );
+printf( "<I> Largest prefix grouping     : %d members\n", $largest_bucket );
+printf( "<I> Longest common prefix       : %s\n", $lcp ? $lcp : "Not found" );
 　
 #-------------------------------------------------------------------
 sub longest_common_prefix {
-   # longest_common_prefix( $|@ ): returns $
-   # find longest common prefix of scalar list
-   my $prefix = shift;
-   for (@_) {
-      chop $prefix while (! /^\Q$prefix\E/);
-   }
-   return $prefix;
+    # find longest common prefix of scalar list
+    my $prefix = shift;
+    for (@_) {
+        chop $prefix while ( !/^\Q$prefix\E/ );
+    }
+    return $prefix;
 }
+　
 #-------------------------------------------------------------------
 sub lcp_score {
-   my $n = 0;
-   my ($a, $b) = @_;
-   my $shortest;
-   map {$shortest=$_ if !$shortest or $_<$shortest} (length($a),length($b));
-　
-   if (($a eq "")) { $a="first_line"; }
-   my @arraya = split(//, $a);
-   my @arrayb = split(//, $b);
-　
-   while($n < $shortest and $arraya[$n] eq $arrayb[$n]){
-      $n++;
-   }
-   printf"%-20s <-> %-20s, shortest=%2s, matched=%s\n",$a,$b,$shortest,$n if $debug;
-   return $n;
+    my $n = 0;
+    my ( $a, $b ) = @_;
+    my $shortest;
+    map {$shortest=$_ if !$shortest or $_<$shortest} (length($a),length($b));
+    if ( ( $a eq "" ) ) { $a = "first_line"; }
+    my @arraya = split( //, $a );
+    my @arrayb = split( //, $b );
+    while ( $n < $shortest and $arraya[$n] eq $arrayb[$n] ) {
+        $n++;
+    }
+    return $n;
 }
-#-------------------------------------------------------------------
-my $fh;
-my $pos=0;
-　
-if (defined($ARGV[0])) {
-   my $inputfile = $ARGV[0]; open ($fh, "<", $inputfile) or die "$!\n";
-} else {
-   print "DEBUG: Using example data\n" if $debug;
-   $fh = do { local(*FH); \*FH };
-   open ($fh, "<&DATA") or die "$!\n";
-   $pos = tell DATA;
-}
-#-------------------------------------------------------------------
-　
-seek($fh,$pos,0);
-my $line_last = "";
-my $score=0;
-my $score_last=0;
-my $array_n=0;
-my @array;
-while (defined (my $line = <$fh>)) {
-   chomp $line;
-   $score=lcp_score($line_last,$line);
-   $score=$arbmax?($score>=$arbmax):$score;
-   if ( $score == 0 || $score < $score_last ) {
-      # Create a new array index as we didn't match well with the last line
-      $array_n++ unless $. == 1; # Dont skip index of 0 pls.
-      print "DEBUG: score=$score : new array($array_n) : $line\n" if $debug;
-      $array[$array_n]=[$line];
-   } else {
-      # Append to the existing array index
-      print "DEBUG: score=$score : append($array_n)    : $line\n" if $debug;
-      push @{$array[$array_n]},$line;
-      #$array_n++;
-   }
-   $score_last = $score;
-   $line_last = $line;
-}
-　
-#-------------------------------------------------------------------
-# Sort the LoL by the reverse size and print
-sub by_reverse_array_size {
-   @$b <=> @$a;
-}
-　
-foreach my $row (sort by_reverse_array_size @array) {
-   foreach my $column (@$row) {
-      print "$column\n";
-   }
-   print "\n";
-}
-　
-#-------------------------------------------------------------------
-seek($fh,$pos,0);
-my @lcp = map {chomp; $_} <$fh>;
-printf("<I> Common prefix matching currently capped at %d characters\n",$arbmax);
-printf("<I> Found %d groupings, %s\n",$array_n+1,longest_common_prefix(@lcp)?"longest common prefix found was '".longest_common_prefix(@lcp)."'":"no common prefix was found");
 　
 #-------------------------------------------------------------------
 __DATA__
