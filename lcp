@@ -1,13 +1,14 @@
 #!/usr/bin/env perl
 # 16/12/2014 - TRCM - Identify the longest common prefix
+# 26/10/2017 - TRCM - Dont compare beyond the length of shortest string
 # TODO : allow passing arbmax and filename  via getops
 use strict;
 use warnings;
-# Set to something other than 0 for information on the scoring values
-my $debug=0;
+# Set to something for information on the scoring values
+my $debug;
 # experiment with limiting score for larger groupings
-my $arbmax=4;
-
+my $arbmax=6;
+　
 #-------------------------------------------------------------------
 sub longest_common_prefix {
    # longest_common_prefix( $|@ ): returns $
@@ -22,21 +23,25 @@ sub longest_common_prefix {
 sub lcp_score {
    my $n = 0;
    my ($a, $b) = @_;
+   my $shortest;
+   map {$shortest=$_ if !$shortest or $_<$shortest} (length($a),length($b));
+　
    if (($a eq "")) { $a="first_line"; }
    my @arraya = split(//, $a);
    my @arrayb = split(//, $b);
-   while($arraya[$n] eq $arrayb[$n]){
+　
+   while($n < $shortest and $arraya[$n] eq $arrayb[$n]){
       $n++;
    }
+   printf"%-20s <-> %-20s, shortest=%2s, matched=%s\n",$a,$b,$shortest,$n if $debug;
    return $n;
 }
 #-------------------------------------------------------------------
 my $fh;
-my $pos;
-
+my $pos=0;
+　
 if (defined($ARGV[0])) {
    my $inputfile = $ARGV[0]; open ($fh, "<", $inputfile) or die "$!\n";
-   $pos = 0;
 } else {
    print "DEBUG: Using example data\n" if $debug;
    $fh = do { local(*FH); \*FH };
@@ -44,7 +49,7 @@ if (defined($ARGV[0])) {
    $pos = tell DATA;
 }
 #-------------------------------------------------------------------
-
+　
 seek($fh,$pos,0);
 my $line_last = "";
 my $score=0;
@@ -69,26 +74,26 @@ while (defined (my $line = <$fh>)) {
    $score_last = $score;
    $line_last = $line;
 }
-
+　
 #-------------------------------------------------------------------
 # Sort the LoL by the reverse size and print
 sub by_reverse_array_size {
    @$b <=> @$a;
 }
-
+　
 foreach my $row (sort by_reverse_array_size @array) {
    foreach my $column (@$row) {
       print "$column\n";
    }
    print "\n";
 }
-
+　
 #-------------------------------------------------------------------
 seek($fh,$pos,0);
 my @lcp = map {chomp; $_} <$fh>;
 printf("<I> Common prefix matching currently capped at %d characters\n",$arbmax);
 printf("<I> Found %d groupings, %s\n",$array_n+1,longest_common_prefix(@lcp)?"longest common prefix found was '".longest_common_prefix(@lcp)."'":"no common prefix was found");
-
+　
 #-------------------------------------------------------------------
 __DATA__
 nygmdp064
