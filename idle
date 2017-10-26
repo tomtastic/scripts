@@ -1,0 +1,43 @@
+#!/usr/bin/perl
+　
+use strict;
+use warnings;
+use threads;
+use threads::shared;
+　
+my @whodata = map {
+    chomp $_;
+    my ($user,$pty,$host,$idle) = split(/\s+/,$_,4);
+    ("$user,$pty,$host,$idle");
+} `who -uH|awk '/^[dz][0-9]/ {print \$1,\$2,\$NF,\$(NF-2)}'`;
+　
+my %users : shared;
+# Prepare hash keys with userIDs
+%users = map { (split(/,/,$_))[0] => undef } @whodata;
+# Resolve lookup table of userIDs in parallel threads...
+my @threads = map { threads->create(\&process, $_); } keys %users;
+# Wait for those threads to finish
+$_->join for @threads;
+　
+sub process {
+    my $userid = shift;
+    chomp(my $fullname=`adquery user $userid|cut -d: -f5`);
+    # Drop case to lower, then upper for first letter of each word
+    $fullname =~ s/([\w']+)/\u\L$1/g;
+    lock %users;     # Or not, if you're sure you have unique keys
+    $users{$userid}=$fullname;
+}
+　
+## Determine which user has the maximum idle time
+#my $k_max=1;
+#while (my ($k,$v) = each %hash) {
+#    if ($v gt $hash{$k_max}) {
+#        $k_max = $k;
+#    }
+#}
+　
+# Print the 'who' data, transposing with full names
+foreach my $line (sort @whodata) {
+    my ($userid,$pty,$host,$idle) = split(/,/,$line,4);
+    printf "%-24s %-7s IDLE:%-5s %s\n",$users{$userid},$pty,$idle,$host;
+}
