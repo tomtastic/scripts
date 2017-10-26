@@ -1,44 +1,59 @@
 #!/usr/bin/perl
-　
+# 20171126 - TRCM - Playing with threads, using the map method
 use strict;
 use warnings;
 use threads;
 use threads::shared;
 　
+# Get some data about current user sessions, our aim is to transform
+# the userids therein into their fullnames via execution of
+# 'adquery user $userid' run in parallel threads for each userid.
 my @whodata = map {
-    chomp $_;
-    my ($user,$pty,$host,$idle) = split(/\s+/,$_,4);
-    ("$user,$pty,$host,$idle");
-} `who -uH|awk '/^[a-z][0-9]*/ {print \$1,\$2,\$NF,\$(NF-2)}'`;
+        chomp $_;
+        my ($userid,$pty,$host,$idle) = split(/\s+/,$_,4);
+        ("$userid,$pty,$host,$idle");
+    } `who -uH|awk '/^[a-z][0-9]*/ {print \$1,\$2,\$NF,\$(NF-2)}'`;
 　
-my %users : shared;
-# Prepare hash keys with userIDs
+# Setup a hash to share with the threads so each can write back their results
+my %users :shared;
+　
+# Split out the userIDs and populate the hash keys with them
 %users = map { (split(/,/,$_))[0] => undef } @whodata;
-# Resolve lookup table of userIDs in parallel threads...
-my @threads = map { threads->create(\&process, $_); } keys %users;
+　
+# Create threads running subroutine workload($_) for each key in the hash
+my @threads = map { threads->create(\&workload, $_); } keys %users;
+　
 # Wait for those threads to finish
 $_->join for @threads;
 　
-sub process {
+# Print the 'who' data, with the thread-found-fullnames, sorted by name
+foreach my $line (sort {$users{(split(/,/,$a))[0]}{'FN'} cmp $users{(split(/,/,$b))[0]}{'FN'}} @whodata) {
+    my ($userid,$pty,$host,$idle) = split(/,/,$line,4);
+    printf "%-9s %-24s %-7s %-5s %s\n",$userid,$users{$userid}{'FN'},$pty,$idle,$host;
+}
+　
+# The workload to run as a thread
+sub workload {
     my $userid = shift;
     chomp(my $fullname=`adquery user $userid 2>/dev/null |cut -d: -f5`);
+　
     # Drop case to lower, then upper for first letter of each word
     $fullname =~ s/([\w']+)/\u\L$1/g;
     $fullname = $userid if ($fullname eq "");
-    lock %users;     # Or not, if you're sure you have unique keys
-    $users{$userid}=$fullname;
-}
 　
-## Determine which user has the maximum idle time
-#my $k_max=1;
-#while (my ($k,$v) = each %hash) {
-#    if ($v gt $hash{$k_max}) {
-#        $k_max = $k;
-#    }
-#}
+    # Share any newly created references before assigning to them
+    $users{$userid}=&share({});
+    $users{$userid}{'FN'}=&share({});
 　
-# Print the 'who' data, with full names, sort by name
-foreach my $line (sort {$users{(split(/,/,$a))[0]} cmp $users{(split(/,/,$b))[0]}} @whodata) {
-    my ($userid,$pty,$host,$idle) = split(/,/,$line,4);
-    printf "%-9s %-24s %-7s %-5s %s\n",$userid,$users{$userid},$pty,$idle,$host;
+    # Set advisory lock, so other threads are blocked when attempting to gain
+    # a lock for this shared variable
+    #
+    # Note : We can only lock the actual shared hash, so first must deref!
+    my $subhash = $users{$userid}->{'FN'};
+    lock($subhash);
+    #
+    # (Pointless in these cases as our threads are working on unique keys)
+　
+    $users{$userid}{'FN'}=$fullname;
 }
+# lock has gone out of scope here (unlocked!)
