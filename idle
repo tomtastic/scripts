@@ -9,7 +9,7 @@ my @whodata = map {
     chomp $_;
     my ($user,$pty,$host,$idle) = split(/\s+/,$_,4);
     ("$user,$pty,$host,$idle");
-} `who -uH|awk '/^[dz][0-9]/ {print \$1,\$2,\$NF,\$(NF-2)}'`;
+} `who -uH|awk '/^[a-z][0-9]*/ {print \$1,\$2,\$NF,\$(NF-2)}'`;
 　
 my %users : shared;
 # Prepare hash keys with userIDs
@@ -21,9 +21,10 @@ $_->join for @threads;
 　
 sub process {
     my $userid = shift;
-    chomp(my $fullname=`adquery user $userid|cut -d: -f5`);
+    chomp(my $fullname=`adquery user $userid 2>/dev/null |cut -d: -f5`);
     # Drop case to lower, then upper for first letter of each word
     $fullname =~ s/([\w']+)/\u\L$1/g;
+    $fullname = $userid if ($fullname eq "");
     lock %users;     # Or not, if you're sure you have unique keys
     $users{$userid}=$fullname;
 }
@@ -36,8 +37,8 @@ sub process {
 #    }
 #}
 　
-# Print the 'who' data, transposing with full names
-foreach my $line (sort @whodata) {
+# Print the 'who' data, with full names, sort by name
+foreach my $line (sort {$users{(split(/,/,$a))[0]} cmp $users{(split(/,/,$b))[0]}} @whodata) {
     my ($userid,$pty,$host,$idle) = split(/,/,$line,4);
-    printf "%-24s %-7s IDLE:%-5s %s\n",$users{$userid},$pty,$idle,$host;
+    printf "%-9s %-24s %-7s %-5s %s\n",$userid,$users{$userid},$pty,$idle,$host;
 }
