@@ -1,0 +1,20 @@
+#!/usr/bin/perl
+# 20171031 - TRCM - Sort by field number, allowing negative identifiers
+# eg psort -2 textfile   <-- to sort by second last field
+use strict;
+use warnings;
+no warnings "uninitialized";  # Allow sorting uneven field lengths
+　
+my $fieldnum=0;
+if (defined($ARGV[1])) {
+    $fieldnum = $ARGV[0];
+    shift @ARGV;
+}
+# If we're fed from a pipe, take first arg as chosen field
+if (! -t STDIN) {
+    if (defined($ARGV[0])) {
+        $fieldnum = $ARGV[0];
+        shift @ARGV;
+    }
+}
+print sort {(split(/\s/,$a))[$fieldnum] cmp (split(/\s/,$b))[$fieldnum]} <>;
