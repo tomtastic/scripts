@@ -1,9 +1,17 @@
 #!/usr/bin/perl
-# 20171126 - TRCM - Playing with threads, using the map method
+# 20171026 - TRCM - Playing with threads, using the map method
+# 20171031 - TRCM - Use worker-thread model
 use strict;
 use warnings;
 use threads;
 use threads::shared;
+use Thread::Queue;
+　
+# Number of worker threads is 2, unless we supply an argument
+my $nthreads = $ARGV[0] ? defined($ARGV[0]) : 2;
+　
+my $process_q = Thread::Queue->new();
+my $failed_q  = Thread::Queue->new();
 　
 # Get some data about current user sessions, our aim is to transform
 # the userids therein into their fullnames via execution of
@@ -17,14 +25,31 @@ my @whodata = map {
 # Setup a hash to share with the threads so each can write back their results
 my %users :shared;
 　
-# Split out the userIDs and populate the hash keys with them
+# Fill hash with userIDs as keys (and by doing so, get a unique list)
 %users = map { (split(/,/,$_))[0] => undef } @whodata;
 　
-# Create threads running subroutine workload($_) for each key in the hash
-my @threads = map { threads->create(\&workload, $_); } keys %users;
+# Put the (unique) userIDs into our queue to process
+$process_q->enqueue(keys %users);
 　
-# Wait for those threads to finish
-$_->join for @threads;
+# End the process queue (so dequeue() returns undefined when queue emptied,
+# and therefore worker threads will exit their while loops)
+if ($Thread::Queue::VERSION ge "3.01") {
+    $process_q->end();
+} else {
+    $process_q->enqueue(undef) for ( 1 .. $nthreads );
+}
+　
+# Start the threads working on the process queue
+threads->create( \&worker ) for ( 1 .. $nthreads );
+　
+# Wait for threads to finish
+$_->join() for ( threads->list() );
+　
+# Collate errors
+while ( my $user = $failed_q->dequeue_nb() ) {
+    # dequeue_nb = Return items from the head of a queue with no blocking
+    print "<!> adquery failed to resolve userid : $user\n";
+}
 　
 # Print the 'who' data, with the thread-found-fullnames, sorted by name
 foreach my $line (sort {$users{(split(/,/,$a))[0]}{'FN'} cmp $users{(split(/,/,$b))[0]}{'FN'}} @whodata) {
@@ -32,28 +57,40 @@ foreach my $line (sort {$users{(split(/,/,$a))[0]}{'FN'} cmp $users{(split(/,/,$
     printf "%-9s %-24s %-7s %-5s %s\n",$userid,$users{$userid}{'FN'},$pty,$idle,$host;
 }
 　
-# The workload to run as a thread
-sub workload {
-    my $userid = shift;
-    chomp(my $fullname=`adquery user $userid 2>/dev/null |cut -d: -f5`);
+# The worker thread
+sub worker {
+    while ( my $userid=$process_q->dequeue() ) {
 　
-    # Drop case to lower, then upper for first letter of each word
-    $fullname =~ s/([\w']+)/\u\L$1/g;
-    $fullname = $userid if ($fullname eq "");
+        my $fullname=`adquery user $userid 2>/dev/null`;
+        if ($?) {
+            my $exitcode = $? >> 8;  # Exit code of the subprocess
+            my $exitsig  = $? & 127; # Which signal if any the process died from
+            my $exitcore = $? & 128; # Was there a coredump?
+            #print threads->self()->tid() . ": failed resolving $userid (adquery : $exitcode)\n";
+            $failed_q->enqueue($userid);
+            $fullname = "UNKNOWN";
+        } else {
+            $fullname = (split(/:/,$fullname))[4];
+        }
 　
-    # Share any newly created references before assigning to them
-    $users{$userid}=&share({});
-    $users{$userid}{'FN'}=&share({});
+        # Drop case to lower, then upper for first letter of each word
+        $fullname =~ s/([\w']+)/\u\L$1/g;
+        $fullname = $userid if ($fullname eq "");
 　
-    # Set advisory lock, so other threads are blocked when attempting to gain
-    # a lock for this shared variable
-    #
-    # Note : We can only lock the actual shared hash, so first must deref!
-    my $subhash = $users{$userid}->{'FN'};
-    lock($subhash);
-    #
-    # (Pointless in these cases as our threads are working on unique keys)
+        # Share any newly created references before assigning to them
+        $users{$userid}=&share({});
+        $users{$userid}{'FN'}=&share({});
 　
-    $users{$userid}{'FN'}=$fullname;
+        # Set advisory lock, so other threads are blocked when attempting to gain
+        # a lock for this shared variable
+        #
+        # Note : We can only lock the actual shared hash, so first must deref!
+        my $subhash = $users{$userid}->{'FN'};
+        lock($subhash);
+        #
+        # (Pointless in these cases as our threads are working on unique keys)
+　
+        $users{$userid}{'FN'}=$fullname;
+    }
 }
 # lock has gone out of scope here (unlocked!)
