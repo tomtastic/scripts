@@ -1,0 +1,166 @@
+#!/usr/bin/env perl
+# 2015/02/15 - TRCM - Check AD for account attributes.
+#                   - eg. Locked, Account expiry date, etc.
+# 2016/02/17 - TRCM - refactor as PERL code
+#                   - parse AD date strings
+#                   - colourise
+#
+# TODO : attempt to decode the bitmask userAccountControl
+#
+# NB: Active Directory stores date/time values as the number of 100-nanosecond
+#     intervals that have elapsed since the 0 hour on January 1, 1601 till the
+#     date/time that is being stored. And always in GMT.
+use strict;
+use warnings;
+my $debug = 1;
+use Data::Dumper;
+use POSIX qw[ strftime ];
+my %colour=(
+    green => '32m',
+    yellow => '33m',
+    blue => '34m',
+    cyan => '1;36m',
+    red => '31m',
+    none => '0m'
+);
+
+die unless defined($ARGV[0]);
+sub randarray (@);
+sub stamp2date ($$);
+sub decode_userAccountControl ($);
+$SIG{'INT'} = sub {die "\e[$colour{none}Caught One!\n"};
+
+my $ad_cmd='/usr/bin/ldapsearch';
+my @ad_hosts=('adserver1.com',
+              'adserver2.com',
+              'adserver3.com',
+              'adserver4.com',
+              'adserver5.com');
+my $ad_host = (randarray(@ad_hosts))[0];
+my $ad_dn='dc=umm,dc=ads,dc=umm,dc=com';
+my $ad_opt='-o mech=gssapi -T -1 -o authzid=""';
+my $ad_user=$ARGV[0];
+my $ad_query="\"(&(objectCategory=user)(cn=$ad_user))\"";
+
+# Get a kerberos ticket to allow us to query AD
+#system('kinit');
+# Query AD using our UNIX toolset
+my $ad_cmd_out=`$ad_cmd -h $ad_host -b $ad_dn $ad_opt -x $ad_query 2>&1`;
+if (($? >> 8) != 0) { die "Error checking LDAP, you need to 'kinit' probably!\n$ad_cmd_out\n" } else { chomp $ad_cmd_out }
+my %ad = map { chomp; split(/: /,$_,2) } split /\n/,$ad_cmd_out;
+
+# AD attributes wanted, marked if timestamps need converting :
+my %want=('accountExpires'                          => 1,
+          'badPasswordTime'                         => 1,
+          'badPwdCount'                             => 0,
+          'comment'                                 => 0,
+          'dbagCostcenter'                          => 0,
+          'employeeID'                              => 0,
+          'employeeType'                            => 0,
+          'lastLogon'                               => 1,
+          'lastLogonTimestamp'                      => 1,
+          'logonCount'                              => 0,
+          'mail'                                    => 0,
+          'msDS-LastFailedInteractiveLogonTime'     => 1,
+          'msDS-LastSuccessfulInteractiveLogonTime' => 1,
+          'pwdLastSet'                              => 1,
+          'telephoneNumber'                         => 0,
+          'userAccountControl'                      => 0,
+          'cn'                                      => 0,
+         #'uSNChanged'                              => 0,
+         #'uSNCreated'                              => 0,
+         );
+
+# Dump all the wanted attributes
+foreach my $attribute (sort keys %ad) {
+    next unless exists($want{$attribute});
+    $ad{$attribute} = stamp2date($attribute,$ad{$attribute}) if ($want{$attribute} eq 1);
+    if (-t STDOUT) {
+        printf("\e[$colour{none}%18s : \e[$colour{cyan}%s\e[$colour{none}\n",$attribute,$ad{$attribute});
+    } else {
+        printf("%18s : %s\n",$attribute,$ad{$attribute});
+    }
+}
+if (-t STDOUT) {
+    if (defined($ad{userAccountControl})) {
+        my @uac = &decode_userAccountControl($ad{userAccountControl});
+        for (@uac) {
+            printf("%s\e[$colour{yellow}%s\e[$colour{none}\n",' 'x21,$_);
+        }
+    }
+}
+
+if (-t STDOUT) {
+     print "\nNote: LastLogon and LastLogonTimeStamp are only synchronized once every 14 days.\n";
+     print "      The DC used (\e[$colour{cyan}$ad_host\e[$colour{none}) may not have the most recent value.\n";
+} else {
+    print "\nNote: LastLogon and LastLogonTimeStamp are only synchronized once every 14 days.\n";
+    print "      The DC used ($ad_host) may not have the most recent value.\n";
+}
+
+sub stamp2date($$) {
+    my $attribute=$_[0];
+    my $value=$_[1];
+    return 0 if ($value == 0);
+    my $magic1='11644473600'; # seconds since 01-01-1601
+    my $magic2='11676009600'; # seconds since 01-01-1601, maybe?
+    if ($attribute eq "accountExpires") {
+        $value=($value/10000000)-$magic1;
+    } else {
+        $value=($value/10000000)-$magic1;
+    }
+    return POSIX::strftime("%Y/%m/%d %H:%M:%S GMT",localtime($value));
+}
+
+sub randarray(@) {
+    my @array = @_;
+    my @rand = ();
+    my $seed = $#array + 1;
+    my $randnum = int(rand($seed));
+    $rand[$randnum] = shift(@array);
+    while (1) {
+        $randnum = int(rand($seed));
+        if ( ! defined($rand[$randnum]) ) {
+            $rand[$randnum] = shift(@array);
+        }
+        last if ($#array == -1);
+    }
+    return @rand;
+}
+
+sub decode_userAccountControl($) {
+    my $uac=shift;
+    my %mask=(0x00000001, 'ADS_UF_SCRIPT', # The logon script is executed
+              0x00000002, 'ADS_UF_ACCOUNTDISABLE', # The user account is disabled
+              0x00000008, 'ADS_UF_HOMEDIR_REQUIRED', # The home directory is required
+              0x00000010, 'ADS_UF_LOCKOUT', # The account is currently locked out
+              0x00000020, 'ADS_UF_PASSWD_NOTREQD', # No password is required
+              0x00000040, 'ADS_UF_PASSWD_CANT_CHANGE', # The user cannot change the password
+              0x00000080, 'ADS_UF_ENCRYPTED_TEXT_PASSWORD_ALLOWED', # The user can send an encrypted password
+              0x00000100, 'ADS_UF_TEMP_DUPLICATE_ACCOUNT', # This is an account for users whose primary account is in another domain. This account provides user access to this domain, but not to any domain that trusts this domain. Also known as a local user account
+              0x00000200, 'ADS_UF_NORMAL_ACCOUNT', # This is a default account type that represents a typical user
+              0x00000800, 'ADS_UF_INTERDOMAIN_TRUST_ACCOUNT', # This is a permit to trust account for a system domain that trusts other domains
+              0x00001000, 'ADS_UF_WORKSTATION_TRUST_ACCOUNT', # This is a computer account for a computer that is a member of this domain
+              0x00002000, 'ADS_UF_SERVER_TRUST_ACCOUNT', # This is a computer account for a system backup domain controller that is a member of this domain
+              0x00004000, 'N/A', # Not used
+              0x00008000, 'N/A', # Not used
+              0x00010000, 'ADS_UF_DONT_EXPIRE_PASSWD', # The password for this account will never expire
+              0x00020000, 'ADS_UF_MNS_LOGON_ACCOUNT', # This is an MNS logon account
+              0x00040000, 'ADS_UF_SMARTCARD_REQUIRED', # The user must log on using a smart card
+              0x00080000, 'ADS_UF_TRUSTED_FOR_DELEGATION', # The service account (user or computer account), under which a service runs, is trusted for Kerberos delegation. Any such service can impersonate a client requesting the service
+              0x00100000, 'ADS_UF_NOT_DELEGATED', # The security context of the user will not be delegated to a service even if the service account is set as trusted for Kerberos delegation
+              0x00200000, 'ADS_UF_USE_DES_KEY_ONLY', # Restrict this principal to use only Data Encryption Standard (DES) encryption types for keys
+              0x00400000, 'ADS_UF_DONT_REQUIRE_PREAUTH', # This account does not require Kerberos pre-authentication for logon
+              0x00800000, 'ADS_UF_PASSWORD_EXPIRED', # The user password has expired. This flag is created by the system using data from the Pwd-Last-Set attribute and the domain policy
+              0x01000000, 'ADS_UF_TRUSTED_TO_AUTHENTICATE_FOR_DELEGATION', # The account is enabled for delegation. This is a security-sensitive setting; accounts with this option enabled should be strictly controlled. This setting enables a service running under the account to assume a client identity and authenticate as that user to other remote servers on the network
+    );
+    my @results;
+    foreach my $bit (sort keys %mask) {
+        if (($uac & $bit) == $bit) {
+            push(@results,$mask{$bit});
+            $uac &= ~$bit;
+        }
+    }
+    printf(" ! extra bits: %b\n",$uac) if $uac;
+    return @results;
+}
