@@ -1,0 +1,39 @@
+#!/usr/bin/env perl
+# coinToss.pl
+#
+# Toss a collection of coins a large number of times
+# to determine the distribution of Heads and Tails.
+# N.B. P(Head) = P(Tail) = 50% = 0.5
+
+use strict;
+
+# Inputs
+my $numTosses = 10;  # The num of coin tosses per experiment
+my $runs = 10000000;  # 10 Million - the num of times we repeat the experiment
+
+# Program vars
+my $i;			# a looping variable
+my $j;			# another looping var
+my $toss;		# Keeps running total of the number of 'Heads' during current experiment
+my @collect;	# An array that keeps a total of the number of 'Heads' counted 
+				# in all previous experiment.
+my $percent;	# To convert $collect[0] - $collect[19] to % 
+
+# Outer loop: Repeat "$runs" times 
+for ($j = 0; $j < $runs; $j++) {
+	# Inner loop: One run of 20 tosses
+	for ($i = 0; $i < $numTosses; $i++) {
+		$toss += (rand() < 0.5) ? 1 : 0;
+		#print "$toss\n";
+	}
+	$collect[$toss]++;
+	$toss = 0;
+}
+
+# Print results
+print "\nTails\tCount out of $runs\t%\n";
+for ($i = 0; $i < $numTosses+1; $i++) {
+	$percent = sprintf "%.2f", $collect[$i] / $runs * 100;
+	print "$i\t$collect[$i]\t\t\t$percent%\n"
+}
+
