@@ -1,0 +1,11 @@
+#!/usr/bin/env perl
+# Prefix lines with their number
+# 18/02/2016 - TRCM
+my $c=1;
+
+@h=(<>);
+foreach (@h){
+    chomp;
+    printf "%-4d - %s\n",$c,$_;
+    $c++;
+}
