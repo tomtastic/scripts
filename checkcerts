@@ -1,0 +1,17 @@
+#!/bin/bash
+# Use openssl to try and spot expired SSL certificates
+# 2015/08/06 - TRCM - First draft
+
+for host in $(awk '{print $1}' list.servers); do
+    /usr/bin/echo "$host : \c ";
+    RESPONSE=$(echo "" | openssl s_client -showcerts -connect $host:443 2>&1 \
+            | egrep '^notAfter|Verify return code: 10|Connection refused|s:/CN=' \
+            | sed 's/Verify return code: 10 //;s/connect: //;s/notAfter=//;s/ 0 s:\///' \
+            | sort -u);
+    if [ -z "$RESPONSE" ]; then
+        echo "Valid"
+    else
+        echo "$RESPONSE" | xargs;
+    fi
+
+done
