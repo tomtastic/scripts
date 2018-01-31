@@ -1,0 +1,42 @@
+#!/usr/bin/env perl
+# Print all values for unique keys
+#			key_b,blah,blah,value2
+#			key_a,blah,blah,value1
+#			key_b,blah,blah,value1
+#			key_b,blah,blah,value3
+# Generate :
+#			key_a,blah,blah,value1
+#			key_b,blah,blah,value1,value2,value3
+
+# 2014/05/21 - TRCM
+
+my $csv=$ARGV[0];
+my %hash;
+
+open (my $csvfh, '<', $csv) or die "$! - oops!\n";
+while (defined (my $line= <$csvfh>)) {
+	next if $line =~ /^#/; # skip comments
+	next if $line =~ /^$/; # skip blank lines
+	# portable chomp, because sometimes chomp just sucks
+	$line =~ s/\015?\012?$//;
+	my @array = split ',',$line;
+	#
+	my $server = shift @array;
+	my $user= pop @array;
+	my $safe= pop @array;
+	#
+	my $serversafe = "$server,$safe";
+	if (! exists $hash{$serversafe}) {
+		# Create new anonymous array ref for hash
+		$hash{$serversafe}=[@array,$safe,$user];
+	}
+	else {
+		push @{$hash{$serversafe}},$user;
+	}
+}
+
+foreach my $key (sort keys %hash) {
+	# Dereference the array stored in the hash value before we try to print it
+	my ($f1,$f2) = split ',',$key;
+	printf("%s,%s\n",$f1,join(",",@{$hash{$key}}));
+}
