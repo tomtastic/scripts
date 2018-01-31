@@ -1,0 +1,82 @@
+#!/usr/bin/env perl
+# coinToss.pl
+#
+# Toss a collection of coins a large number of times
+# to determine the distribution of Heads and Tails.
+# N.B. P(Head) = P(Tail) = 50% = 0.5
+#
+# Performance of single thread :
+# real     5:57.501
+# user     5:57.214
+# sys         0.093
+#
+
+use strict;
+
+# Inputs
+my $numtosses = 10;  # Coin tosses per experiment
+#my $runs = 10000000; # 10 Million - the num of times we repeat the experiment
+my $runs = 2000; # 10 Million - the num of times we repeat the experiment
+my $forks = 2;       # Coin tosses to run in parallel
+
+print "Flip a collection of coins a large number of times to determine the distribution of heads and tails\n";
+print " + Flipping $numtosses coins together $runs times\n";
+if ($runs % $forks == 0) {
+	$runs = $runs / $forks;
+	print " + Run parallelism ok, $runs runs each fork ($forks)\n";
+} else {
+	die " ! Run parallelism uneven!\n";
+}
+
+# Program vars
+my $i;			# a looping variable
+my $j;			# another looping var
+my $p;			# another looping var
+my $pid;        # Child pid
+my @children;   # Track children pids
+my $toss;		# Keeps running total of the number of 'Heads' during current experiment
+my @collect;	# An array that keeps a total of the number of 'Heads' counted 
+				# in all previous experiment.
+my $percent;	# To convert $collect[0] - $collect[19] to % 
+
+for ($p = 0; $p < $forks; $p++) {
+    $pid=fork();
+    if (! defined $pid) {
+        # We failed to fork as $pid is undef
+        die "Cannot fork: $!";
+    } elsif ($pid != 0) {
+        # We're the parent as $pid is non-zero
+        print " - PID $pid forked ($p)\n";
+        push(@children, $pid);
+    } else {
+        # We're the child as $pid is zero
+        # Outer loop: Repeat "$runs" times 
+        for ($j = 0; $j < $runs; $j++) {
+	        # Inner loop: One run of each individual coin toss
+	        for ($i = 0; $i < $numtosses; $i++) {
+		        $toss += (rand() < 0.5) ? 1 : 0;
+	        }
+	        $collect[$toss]++;
+	        $toss = 0;
+        }
+        exit($p);
+    }
+}
+
+# Wait for children to finish
+foreach my $n (@children) {
+    my $child = waitpid($n,0); # waitpid returns the pid that finished, see perldoc -f waitpid
+    my $rc = $? >> 8; # remove signal / dump bits from rc
+    print " - PID $child finished with rc $rc\n";
+}
+
+## exit here
+exit 0;
+
+# Print results
+print "\nTails\tCount out of $runs\t%\n";
+for ($i = 0; $i < $numtosses+1; $i++) {
+	$percent = sprintf "%.2f", $collect[$i] / $runs * 100;
+	print "$i\t$collect[$i]\t\t\t$percent%\n"
+}
+
