@@ -1,0 +1,6 @@
+#!/usr/bin/perl
+
+my $endian = sprintf unpack 'I', "\x01\x02\x03\x04";
+print "little endian\n" if ($endian eq "67305985");
+print "big endian\n" if ($endian eq "16909060");
+
