@@ -1,0 +1,9 @@
+#!/usr/bin/perl
+# KW :  Accepts date input as mm:dd:yy hh:mm:ss and converts to Epoc timestamp
+use Time::Local;
+my $d = $ARGV[0];
+my $t = $ARGV[1];
+@d = split /:/, $d;
+@t = split /:/, $t;
+$time = timelocal($t[2], $t[1], $t[0], $d[1], $d[0]-1, $d[2]+2000);
+print "$time\n";
