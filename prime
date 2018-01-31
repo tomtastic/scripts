@@ -1,0 +1,41 @@
+#!/usr/bin/env perl
+# 20140917 - TRCM - Check if a number is prime (using Abigails 1998 unary method)
+use strict;
+use warnings;
+
+local $| = 1;
+my $number = $ARGV[0];
+my $maximum = 100200300;
+#my $maximum = 29941; # prime_regex gives segv on our dev platform above this
+die "Usage: $0 <number>\n" unless (defined $number) and ($number =~ m/^[\d]+$/);
+die "Checking whether $number is prime would take too long\n" unless ($number <= $maximum);
+chomp $number;
+if (defined &prime_mod6wheel($number)) {
+	print "PRIME\n";
+exit 0;
+} else {
+	exit 1; 
+}
+
+sub prime_regex ($) {
+    my $num = shift;
+    my $unary = ("n" x $num);
+    if ($unary !~ m/^n?$|^(nn+?)\1+$/) {
+        # Is prime
+        return 1;
+    } else {
+        # Is not
+        return;
+    }
+}
+
+sub prime_mod6wheel ($) {
+    my($n) = @_;
+    return if ($n == 0) || ($n == 1);
+    return ($n >=2) if $n < 4;
+    return if ($n%2 == 0) || ($n%3 == 0);
+    my $sn=int(sqrt($n));
+    for (my $i = 5; $i <= $sn; $i += 6) {
+        return unless $n % $i && $n % ($i+2);
+    } 1;
+}
