@@ -1,0 +1,30 @@
+#!/usr/bin/env perl
+# 12/02/2015 - TRCM - Add numbers from file/STDIN and print the sum
+#                   - Can take multiple numbers per line 
+#                   - Using 'map' is faster than grep/eval methods
+
+exit unless @ARGV > 0 or (! -t STDIN);  # barf unless we got a filename or we're fed from a pipe
+$n||=0;
+if (-t STDIN) {
+   # Get our data from a file
+   open(my $fh,'<',@ARGV) or die "$!\n";
+   while (<$fh>) {
+       last unless /\S/;
+       chomp;
+       my @l = split;
+       # $n += eval join '+', @l;   # very slow
+       # grep { $n += $_ } @l;      # fast
+       map { $n += $_ } @l;         # marginally faster yet
+   }
+   close $fh;
+} else {
+   # Get our data from STDIN
+   while (<>) {
+       last unless /\S/;
+       chomp;
+       my @l = split;
+       map { $n += $_ } @l;
+   }
+}
+print $n,"\n";
+
