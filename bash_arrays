@@ -1,0 +1,23 @@
+#!/usr/bin/bash
+# Try moving items around within arrays
+# 12/02/2013 - TRCM - first draft
+
+loginpass=(
+'5never:never'
+'4unlikely:unlikely'
+'3sometimes:sometimes'
+'2often:often'
+'1always:always'
+);
+
+echo "Array (original) [${#loginpass[@]}] : ${loginpass[@]}"
+
+# do some work, then decide a found array member is best
+my_found_good_login='2often:often'
+# remove that member from the array
+loginpass=( ${loginpass[@]/$my_found_good_login*/} )
+# put it back at the start of the array
+loginpass=("$my_found_good_login" "${loginpass[@]}")
+
+echo "Array (optimal ) [${#loginpass[@]}] : ${loginpass[@]}"
+
