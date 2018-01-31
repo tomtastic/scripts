@@ -1,0 +1,165 @@
+#!/bin/bash
+# 2014/10/10 - DM - Original
+# 2015/02/19 - TRCM - Randomise the adhost array, so we dont query the same Domain Controller every time
+#                   - Add option to return data unfiltered. e.g.
+#                     adq -a cn=ACE-BLAH description
+#                     adq -a cn=ACE-BLAH "member;range=1500-1505"
+#
+# bash-3.2$ adq -g ACE-BLAH
+# ====================================================================
+# AD Group    : ACE-BLAH
+# Description : This group is used for blah
+# Approvers   : x@y y@z
+# ====================================================================
+# ====================================================================
+# Total members:  1500
+
+
+ADHOSTS=('a' \
+         'b' \
+         'c')
+basedn="ou=peoplezzz";
+options="-T -o mech=gssapi -o authzid="""
+tempfile="$HOME/.adq"
+
+# Function to check if something exists in an array
+function checkarray {
+   for blah in ${TEMPARRAY[@]}; do
+      [[ "$blah" == "$1" ]] && return 0 # Exists in the array
+   done
+   return 1 # Not found
+}
+
+TEMPARRAY=()
+# Build a new array, random item by item, checking each new item is unique
+while [ "${#TEMPARRAY[@]}" -ne "${#ADHOSTS[@]}" ]; do
+   # Pick a random array index between 0 and the length of the array
+   RAND=$[ $RANDOM % ${#ADHOSTS[@]} ]
+   # Check if that array indexed string exists in new array already, adding it if not
+   checkarray "${ADHOSTS[$RAND]}" || TEMPARRAY=(${TEMPARRAY[@]} "${ADHOSTS[$RAND]}")
+done
+# Set the array to the new randomised array contents
+ADHOSTS=("${TEMPARRAY[@]}")
+
+query () {
+   # Use the first AD host in our new randomised list
+      echo ====================================================================
+      if [[ -n "$3" ]]; then
+         filter="^$1:|^$2:|^$3"
+         /usr/bin/ldapsearch -v -h ${ADHOSTS[0]} -b $basedn $options -x "$1" "$2" "$3" &> $tempfile
+         matches=`tail -1 $tempfile | cut -c 1`
+         if [[ $matches -eq 0 ]]; then
+            echo "No Results"
+         else
+            cat $tempfile | egrep -i "$filter" 
+         fi
+      elif [[ -n "$2" ]]; then
+         filter="^$1:|^$2:"
+         /usr/bin/ldapsearch -v -h ${ADHOSTS[0]} -b $basedn $options -x "$1" "$2" &> $tempfile
+         matches=`tail -1 $tempfile | cut -c 1`
+         if [[ $matches -eq 0 ]]; then
+            echo "No Results"
+         else
+            cat $tempfile | egrep -i "$filter" 
+         fi
+      else
+         filter="ALL"
+         /usr/bin/ldapsearch -v -h ${ADHOSTS[0]} -b $basedn $options -x "$1" &> $tempfile
+         matches=`tail -1 $tempfile | cut -c 1`
+         if [[ $matches -eq 0 ]]; then
+            echo "No Results"
+         else
+            cat $tempfile
+         fi
+      fi
+      echo ====================================================================
+   rm $tempfile
+}
+
+group_query () {
+   # Use the first AD host in our new randomised list
+   /usr/bin/ldapsearch -v -h ${ADHOSTS[0]} -b $basedn $options -x "(&(objectCategory=group)(cn=$1))" &> $tempfile
+   matches=`tail -1 $tempfile | cut -c 1`
+   if [[ $matches -eq 0 ]]; then
+      echo "No Results"
+   else
+      echo ====================================================================
+      echo "AD Group    : "$1
+      echo "Description :"$(grep description $tempfile |awk -F: '{print $2}')
+      echo "Approvers   :"$(grep blahblah $tempfile |awk -F: '{print $2}')
+      echo ====================================================================
+      nawk -F'=' '/member: CN=/ {gsub(",.*","");print $2}' $tempfile | sort
+      echo ====================================================================
+      echo "Total members: "$(grep -w member $tempfile | wc -l)
+   fi
+   rm $tempfile
+}
+
+user_query () {
+   # Use the first AD host in our new randomised list
+   /usr/bin/ldapsearch -v -h ${ADHOSTS[0]} -b $basedn $options -x "(&(objectCategory=user)(cn=$1))" &> $tempfile
+   matches=$(tail -1 $tempfile | cut -c 1)
+   if [[ $matches -eq 0 ]]; then
+      echo "No Results"
+   else
+      echo ====================================================================
+      echo "Username      :" $1
+      echo "Full name     :" $(grep displayName $tempfile | awk -F: '{print $2}')
+      echo "Email address :" $(/usr/bin/ldapsearch -v -h ${ADHOSTS[0]} -b $basedn $options -x "(&(objectCategory=user)(cn=$1))" mail| awk '/mail:/ {print $2}')
+      echo ====================================================================
+      #nawk -F'=' '/memberOf: CN=ACE/ {gsub(",.*","");print $2}' $tempfile | sort
+      nawk -F'=' '/memberOf: CN=/ {gsub(",.*","");print $2}' $tempfile | sort
+      echo ====================================================================
+   fi
+   rm $tempfile
+}
+
+usage () {
+    echo
+    echo "**********ERROR**********"
+    echo "Usage:   adq -u <username>"
+    echo "         adq -g <groupname>"
+    echo "         adq -a \"(cn=<common_name>)\" <filter1> <filter2>"
+    echo
+    echo "Example: adq -a \"cn=blahblah\" logonCount  <-- Returns just logonCount for 'blahblah'"
+    echo "Example: adq -a \"cn=blahblah\"             <-- Returns _ALL_ information"
+    echo
+    exit 1
+}
+
+kcheck () {
+   # Use the first AD host in our new randomised list
+   /usr/bin/ldapsearch -v -h ${ADHOSTS[0]} -b $basedn $options -x "(&(objectCategory=user)(cn=$LOGNAME))" &> $tempfile
+   grep ldap_sasl_interactive_bind_s $tempfile > /dev/null
+   if [[ $? -eq 0 ]]; then
+      echo
+      echo "***********************ERROR***********************"
+      echo "Kerberos Auth Failure  - check ticket (klist/kinit)"
+      echo
+      rm $tempfile
+      exit 1
+   fi
+}
+
+
+kcheck
+if [[ $1 != "-a" && $1 != "-u" && $1 != "-g"  ]]; then
+   usage
+elif [ $1 == "-a" ]; then
+      # Accept many args if in '-a' query mode
+      echo > /dev/null
+elif [ $# -ne 2 ]; then
+      usage
+fi 
+
+case $1 in
+   -a )
+      query $2 $3 $4 ;;
+   -u )
+      user_query $2 ;;
+   -g )
+      group_query $2 ;;
+   * )
+      usage ;;
+esac
+ 
