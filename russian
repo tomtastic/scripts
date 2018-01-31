@@ -1,0 +1,24 @@
+#!/usr/bin/bash
+#times run: 16
+#last run: 1455206187
+
+TIMES_RUN=$(( $(grep "times run" "$0" | head -1 | cut -d: -f2) + 1))
+perl -pi -e "s/times run:.*$/times run: $TIMES_RUN/ if $.==2" "$0"
+
+LAST_RUN=$(grep "last run" "$0" | head -1 | cut -d: -f2)
+perl -pi -e "s/last run:.*$/last run: $(perl -e 'print time()')/ if $.==3" "$0"
+
+# epoch seconds three ways
+# nawk 'BEGIN{print srand()}'    # If nawk
+# perl -e 'print time()."\n"'    # If perl
+# date '+%s'                     # GNU date
+if [ "$(( $(perl -e 'print time()') - $LAST_RUN ))" -lt 5 ]; then
+    exit 1
+fi
+
+if [ $[ $RANDOM % 6 ] == 0 ]; then
+    echo "*Bang*"
+else
+    echo "Click!"
+fi
+
