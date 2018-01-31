@@ -1,0 +1,12 @@
+#!/usr/bin/env perl -w
+# 01/12/2014 - TRCM - birthday paradox probablility generator
+# Displays a table of probabilities that members of a given group size share a birthday
+
+my $group=$ARGV[0];
+my ($prob,$i)=1;
+
+for ($i=1;$i<=$group;++$i) {
+   $prob*=(366-$i)/365;
+   printf(" %3d - %5.3f", $i, 1-$prob);
+   print "\n" if ($i%5==0 || $i==$group);
+}
