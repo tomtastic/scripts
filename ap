@@ -1,0 +1,12 @@
+#!/bin/bash
+
+/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I \
+  | perl -e '%h=map{chomp;s/^\s+//;split(/: /,$_,2)}(<>); \
+        printf("%s,%s,CH:%s,TX:%d/%dMbps,RSSI:%sdBm\n",
+            $h{SSID},
+            $h{BSSID},
+            do { (my $trim = $h{channel}) =~ s/,.*//; $trim },
+            $h{lastTxRate},$h{maxRate},
+            $h{agrCtlRSSI}
+        );
+    '
