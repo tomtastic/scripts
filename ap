@@ -1,5 +1,26 @@
 #!/bin/bash
 
+# Turn this :
+# $ /System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I
+#      agrCtlRSSI: -69
+#      agrExtRSSI: 0
+#     agrCtlNoise: -94
+#     agrExtNoise: 0
+#           state: running
+#         op mode: station
+#      lastTxRate: 486
+#         maxRate: 600
+# lastAssocStatus: 0
+#     802.11 auth: open
+#       link auth: none
+#           BSSID: 0:3a:7d:12:45:ce
+#            SSID: BTOpenzone
+#             MCS: 0
+#         channel: 44,1
+        
+# Into this :
+# BTOpenzone,0:3a:7d:12:45:ce,CH:44,TX:486/600Mbps,RSSI:-70dBm
+
 /System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I \
   | perl -e '%h=map{chomp;s/^\s+//;split(/: /,$_,2)}(<>); \
         printf("%s,%s,CH:%s,TX:%d/%dMbps,RSSI:%sdBm\n",
