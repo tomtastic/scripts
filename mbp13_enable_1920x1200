@@ -1,0 +1,70 @@
+#!/bin/bash
+# Patch the display overrides file to support 1920x1200 HiDPI resolution
+
+override_base='/System/Library/Displays/Contents/Resources/Overrides'
+
+echo -n "Checking ioreg for display key... "
+while read DisplayVendorID DisplayProductID; do
+    VendorID=$DisplayVendorID
+    ProductID=$DisplayProductID
+done <<< $( \
+        ioreg -lw0 | \
+            awk -F'-' '/IODisplayPrefsKey/ {
+                gsub("\"","");print $(NF-1),$(NF)
+            }' \
+        )
+if [[ $?==0 ]]; then
+    echo "[OK]"
+else
+    echo "[FAILED]"
+    exit 1
+fi
+echo " + VendorID  : $VendorID"
+echo " + ProductID : $ProductID"
+override_file="$override_base/DisplayVendorID-$VendorID/DisplayProductID-$ProductID"
+override_bkp="$HOME/Desktop/DisplayProductID-$ProductID.backup"
+
+echo -n "Checking for matching override file... "
+if [[ -f "$override_file" ]]; then
+    echo "[OK]"
+else
+    echo "[FAILED]"
+    exit 1
+fi
+
+echo -n "Checking for 1920x1200 HiDPI override... "
+if [[ `grep 'AAAPAAAACWAAAAAB' $override_file` ]]; then
+   echo "[ENABLED]"
+else
+    echo "[NOT PRESENT]"
+fi
+
+echo -n "Checking status of System Integrity Protection... "
+if [[ `csrutil status | grep -i enabled` ]]; then
+    echo "[OK]"
+else
+    echo "[FAILED]"
+    echo " ! Cant make changes unless SIP is disabled"
+    echo " ! Boot into Recovery Mode, type 'csrutil disable' in Terminal, reboot"
+    exit 1
+fi
+
+echo -n "Making backup of override file to $HOME/Desktop... "
+cp -f "$override_file" "$override_bkp.$(date +%Y%m%d)"
+if [[ -f "$override_bkp.$(date +%Y%m%d)" ]]; then
+    echo "[OK]"
+else
+    echo "[FAILED]"
+    exit 1
+fi
+
+echo -n "Patching override file to enable 1920x1200 HiDPI..."
+awk '/<array\>/ { $0 = $0 "\n\t\t<data>AAAPAAAACWAAAAAB</data>" } 1' $override_bkp > $override_file
+
+echo -n "Verifying 1920x1200 HiDPI override... "
+if [[ `grep 'AAAPAAAACWAAAAAB' $override_file` ]]; then
+   echo "[ENABLED]"
+else
+    echo "[FAILED!]"
+    echo " ! Restore $override_bkp to $override_file"
+fi
