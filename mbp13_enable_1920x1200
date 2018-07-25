@@ -35,6 +35,7 @@ fi
 echo -n "Checking for 1920x1200 HiDPI override... "
 if [[ `grep 'AAAPAAAACWAAAAAB' $override_file` ]]; then
    echo "[ENABLED]"
+   exit 0
 else
     echo "[NOT PRESENT]"
 fi
@@ -57,6 +58,8 @@ else
     echo "[FAILED]"
     exit 1
 fi
+
+read -p "OK to to proceed? (Ctrl-C if not) ? "
 
 echo -n "Patching override file to enable 1920x1200 HiDPI..."
 awk '/<array\>/ { $0 = $0 "\n\t\t<data>AAAPAAAACWAAAAAB</data>" } 1' $override_bkp > $override_file
