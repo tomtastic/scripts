@@ -4,20 +4,17 @@
 override_base='/System/Library/Displays/Contents/Resources/Overrides'
 
 echo -n "Checking ioreg for display key... "
-while read DisplayVendorID DisplayProductID; do
-    VendorID=$DisplayVendorID
-    ProductID=$DisplayProductID
-done <<< $( \
-        ioreg -lw0 | \
-            awk -F'-' '/IODisplayPrefsKey/ {
-                gsub("\"","");print $(NF-1),$(NF)
-            }' \
-        )
-if [[ $?==0 ]]; then
-    echo "[OK]"
-else
+read VendorID ProductID <<< $( \
+    ioreg -lw0 | \
+        awk -F'-' '/IODisplayPrefsKey/ {
+            gsub("\"","");print $(NF-1),$(NF)
+        }'
+    )
+if [[ -z "$VendorID" || -z "$ProductID" ]]; then
     echo "[FAILED]"
     exit 1
+else
+    echo "[OK]"
 fi
 echo " + VendorID  : $VendorID"
 echo " + ProductID : $ProductID"
@@ -34,8 +31,8 @@ fi
 
 echo -n "Checking for 1920x1200 HiDPI override... "
 if [[ `grep 'AAAPAAAACWAAAAAB' $override_file` ]]; then
-   echo "[ENABLED]"
-   exit 0
+    echo "[ENABLED]"
+    exit 0
 else
     echo "[NOT PRESENT]"
 fi
@@ -50,7 +47,7 @@ else
     exit 1
 fi
 
-echo -n "Making backup of override file to $HOME/Desktop... "
+echo -n "Making backup of override file to $override_bkp_$(date +%Y%m%d)... "
 cp -f "$override_file" "$override_bkp.$(date +%Y%m%d)"
 if [[ -f "$override_bkp.$(date +%Y%m%d)" ]]; then
     echo "[OK]"
@@ -66,8 +63,10 @@ awk '/<array\>/ { $0 = $0 "\n\t\t<data>AAAPAAAACWAAAAAB</data>" } 1' $override_b
 
 echo -n "Verifying 1920x1200 HiDPI override... "
 if [[ `grep 'AAAPAAAACWAAAAAB' $override_file` ]]; then
-   echo "[ENABLED]"
+    echo "[ENABLED]"
+    echo " ! Boot into Recovery Mode, type 'csrutil enable' in Terminal, reboot"
 else
     echo "[FAILED!]"
-    echo " ! Restore $override_bkp to $override_file"
+    echo " ! Please restore $override_bkp to $override_file"
+    echo " ! Boot into Recovery Mode, type 'csrutil enable' in Terminal, reboot"
 fi
