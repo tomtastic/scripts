@@ -1,0 +1,40 @@
+# Credit to Brad Howes
+#
+# Worth putting this in ~/Library/LaunchAgents/com.user.loginscript.plist :
+# 
+# <?xml version="1.0" encoding="UTF-8"?>
+# <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+# <plist version="1.0">
+# <dict>
+#    <key>Label</key>
+#    <string>com.user.loginscript</string>
+#    <key>ProgramArguments</key>
+#    <array><string>$HOME/src/remap_mac_keys</string></array>
+#    <key>RunAtLoad</key>
+#    <true/>
+# </dict>
+# </plist>
+
+FROM='"HIDKeyboardModifierMappingSrc"'
+TO='"HIDKeyboardModifierMappingDst"'
+
+ARGS=""
+function Map # FROM TO
+{
+    CMD="${CMD:+${CMD},}{${FROM}: ${1}, ${TO}: ${2}}"
+}
+
+SECTION="0x700000064"
+ESCAPE="0x700000029"
+BACKQUOTE="0x700000035"
+SHIFT_LOCK="0x700000039"
+L_SHIFT="0x7000000E1"
+R_COMMAND="0x7000000E7"
+L_CONTROL="0x7000000E0"
+
+Map ${SECTION} ${ESCAPE}
+#Map ${SHIFT_LOCK} ${L_SHIFT}
+#Map ${R_COMMAND} ${SHIFT_LOCK}
+#Map ${BACKQUOTE} ${L_CONTROL}
+
+hidutil property --set "{\"UserKeyMapping\":[${CMD}]}"
