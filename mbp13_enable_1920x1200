@@ -38,7 +38,7 @@ else
 fi
 
 echo -n "Checking status of System Integrity Protection... "
-if [[ `csrutil status | grep -i enabled` ]]; then
+if [[ `csrutil status | grep -i disabled` ]]; then
     echo "[OK]"
 else
     echo "[FAILED]"
@@ -58,8 +58,9 @@ fi
 
 read -p "OK to to proceed? (Ctrl-C if not) ? "
 
-echo -n "Patching override file to enable 1920x1200 HiDPI..."
-awk '/<array\>/ { $0 = $0 "\n\t\t<data>AAAPAAAACWAAAAAB</data>" } 1' $override_bkp > $override_file
+echo "Patching override file to enable 1920x1200 HiDPI..."
+awk '/<array\>/ { $0 = $0 "\n\t\t<data>AAAPAAAACWAAAAAB</data>" } 1' $override_bkp.$(date +%Y%m%d) 2>/dev/null >$override_bkp.patched.$(date +%Y%m%d)
+sudo cp $override_bkp.patched.$(date +%Y%m%d) $override_file 2>/dev/null
 
 echo -n "Verifying 1920x1200 HiDPI override... "
 if [[ `grep 'AAAPAAAACWAAAAAB' $override_file` ]]; then
