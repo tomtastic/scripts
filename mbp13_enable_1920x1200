@@ -4,12 +4,12 @@
 override_base='/System/Library/Displays/Contents/Resources/Overrides'
 
 echo -n "Checking ioreg for display key... "
-read VendorID ProductID <<< $( \
+read -r VendorID ProductID <<< "$( \
     ioreg -lw0 | \
         awk -F'-' '/IODisplayPrefsKey/ {
             gsub("\"","");print $(NF-1),$(NF)
         }'
-    )
+    )"
 if [[ -z "$VendorID" || -z "$ProductID" ]]; then
     echo "[FAILED]"
     exit 1
@@ -19,7 +19,8 @@ fi
 echo " + VendorID  : $VendorID"
 echo " + ProductID : $ProductID"
 override_file="$override_base/DisplayVendorID-$VendorID/DisplayProductID-$ProductID"
-override_bkp="$HOME/Desktop/DisplayProductID-$ProductID.backup"
+override_bkp="$HOME/Desktop/DisplayProductID-$ProductID.backup_$(date +%Y%m%d)"
+override_bkp_patched="$HOME/Desktop/DisplayProductID-$ProductID.patched_$(date +%Y%m%d)"
 
 echo -n "Checking for matching override file... "
 if [[ -f "$override_file" ]]; then
@@ -30,7 +31,7 @@ else
 fi
 
 echo -n "Checking for 1920x1200 HiDPI override... "
-if [[ `grep 'AAAPAAAACWAAAAAB' $override_file` ]]; then
+if grep -q 'AAAPAAAACWAAAAAB' "$override_file"; then
     echo "[ENABLED]"
     exit 0
 else
@@ -38,7 +39,7 @@ else
 fi
 
 echo -n "Checking status of System Integrity Protection... "
-if [[ `csrutil status | grep -i disabled` ]]; then
+if csrutil status | grep -qi disabled; then
     echo "[OK]"
 else
     echo "[FAILED]"
@@ -47,27 +48,27 @@ else
     exit 1
 fi
 
-echo -n "Making backup of override file to $override_bkp_$(date +%Y%m%d)... "
-cp -f "$override_file" "$override_bkp.$(date +%Y%m%d)"
-if [[ -f "$override_bkp.$(date +%Y%m%d)" ]]; then
+echo -n "Making backup of override file to $override_bkp... "
+cp -f "$override_file" "$override_bkp"
+if [[ -f "$override_bkp" ]]; then
     echo "[OK]"
 else
     echo "[FAILED]"
     exit 1
 fi
 
-read -p "OK to to proceed? (Ctrl-C if not) ? "
+read -rp "OK to to proceed? (Ctrl-C if not) ? "
 
 echo "Patching override file to enable 1920x1200 HiDPI..."
-awk '/<array\>/ { $0 = $0 "\n\t\t<data>AAAPAAAACWAAAAAB</data>" } 1' $override_bkp.$(date +%Y%m%d) 2>/dev/null >$override_bkp.patched.$(date +%Y%m%d)
-sudo cp $override_bkp.patched.$(date +%Y%m%d) $override_file 2>/dev/null
+awk '/<array\>/ { $0 = $0 "\n\t\t<data>AAAPAAAACWAAAAAB</data>" } 1' "$override_bkp" 2>/dev/null > "$override_bkp_patched"
+sudo cp "$override_bkp_patched" "$override_file" 2>/dev/null
 
 echo -n "Verifying 1920x1200 HiDPI override... "
-if [[ `grep 'AAAPAAAACWAAAAAB' $override_file` ]]; then
+if grep -q 'AAAPAAAACWAAAAAB' "$override_file"; then
     echo "[ENABLED]"
     echo " ! Boot into Recovery Mode, type 'csrutil enable' in Terminal, reboot"
 else
     echo "[FAILED!]"
-    echo " ! Please restore $override_bkp to $override_file"
+    echo " ! Please restore ${override_bkp} to ${override_file}"
     echo " ! Boot into Recovery Mode, type 'csrutil enable' in Terminal, reboot"
 fi
