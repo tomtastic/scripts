@@ -1,1 +1,72 @@
-#ok
+#!/bin/bash
+# 20190509 - TRCM - Show the ARP table, appending resolved hostnames and MAC vendors
+
+OUI_URL="http://standards-oui.ieee.org/oui/oui.txt"
+OUI=/var/lib/ieee-data/oui.txt
+OUI_LOCAL=~/oui.txt
+if [[ ! -f $OUI ]]; then
+    >&2 echo " + Downloading OUI reference"
+    curl -L --progress-bar --url "${OUI_URL}" -o $OUI_LOCAL
+    OUI=$OUI_LOCAL
+fi
+
+# Nameserver detection
+if [[ $(uname -s) =~ 'CYGWIN' ]]; then
+    # Find a nameserver for PTR lookups
+    NS=$(ipconfig /all | awk -F: '/DNS Servers/ {print $2}' \
+$//')   | sed 's/^\ //;s/
+else
+    NS=$(awk '/nameserver/ {print $2}' /etc/resolv.conf)
+    if [[ "$NS" =~ 127\.0\.0 ]]; then
+        # We're on a systemd box, try the default router instead?
+        # 'G'ateway was probably our DHCP server, so try it for
+        # local DNS service too.
+        NS=$(netstat -rn | awk '/G\s/ {print $2}')
+    fi
+fi
+
+# Setup array
+declare -a arp_table=()
+# Setup some associative arrays
+declare -A ip_to_name
+declare -A smac_to_vendor
+
+# Use process substitution here or we lose scope for arp_table()
+>&2 echo " + Parsing ARP table"
+if [[ $(uname -s) =~ 'CYGWIN' ]]; then
+    while read -r ip mac smac; do
+        arp_table+=("$ip $mac $smac")
+    done < <(arp -a | awk '/dynamic/ {
+            split($2,smac,/-/);
+            print $1,$2,toupper(smac[1])"-"toupper(smac[2])"-"toupper(smac[3])}')
+else
+    while read -r ip mac smac; do
+        arp_table+=("$ip $mac $smac")
+    done < <(arp -en 2>/dev/null | awk '/ether/ {
+            split($3,smac,/:/);
+            print $1,$3,toupper(smac[1])"-"toupper(smac[2])"-"toupper(smac[3])}')
+fi
+
+# Create an associative array of IP to HOSTNAME
+# Use process substitution here or we lose scope for arp_table()
+>&2 echo " + Resolving IPs"
+while read -r ip name; do
+    ip_to_name[$ip]="$name"
+done < <(for line in "${arp_table[@]}"; do
+            echo " -x ${line%\ *} PTR"
+         done | \
+            dig +noall +answer +noedns @"$NS" -f- | \
+            awk '{split($1,i,"."); print i[4]"."i[3]"."i[2]"."i[1],$NF}')
+
+# Create an associative array of MAC to VENDOR
+# Use process substitution here or we lose scope for arp_table()
+>&2 echo " + Building OUI vendor lookup array"
+while read -r line; do
+    smac_to_vendor[${line%|*}]="${line#*|}"
+done < <(awk -F'\t' '/(hex)/ {gsub(/\r/,"");split($1,mac,/ /);print mac[1]"|"$3}' $OUI | grep -v '^|$')
+
+printf '%-15s %-17s %-25s %s\n' "Address" "HWaddress" "Hostname" "Vendor"
+for line in "${arp_table[@]}@"; do
+    IFS=" " read -r ip mac smac <<< "$line"
+    printf '%-15s %-17s %-25.25s %s\n' "$ip" "$mac" "${ip_to_name[$ip]}" "${smac_to_vendor[$smac]}"
+done
