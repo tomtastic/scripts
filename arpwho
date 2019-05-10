@@ -4,7 +4,7 @@
 OUI_URL="http://standards-oui.ieee.org/oui/oui.txt"
 OUI=/var/lib/ieee-data/oui.txt
 OUI_LOCAL=~/oui.txt
-if [[ ! -f $OUI ]]; then
+if [[ ! -f $OUI && ! -f $OUI_LOCAL ]]; then
     >&2 echo " + Downloading OUI reference"
     curl -L --progress-bar --url "${OUI_URL}" -o $OUI_LOCAL
     OUI=$OUI_LOCAL
