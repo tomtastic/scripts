@@ -41,7 +41,7 @@ if ($user) {
         my $shell=(exists $okshell{$users->{$user}->{'shell'}})
             ?$users->{$user}->{'shell'}
             :"BAD_SHELL($users->{$user}->{'shell'})";
-        printf("uid=%hd(%s) gid=%hd(%s) shell=%s home=%s groups=%s\n"
+        printf("uid=%ld(%s) gid=%ld(%s) shell=%s home=%s groups=%s\n"
                   ,scalar getpwnam($user)
                   ,$user
                   ,$users->{$user}->{'gid'}
@@ -57,7 +57,7 @@ if ($user) {
     my $groups = getgroups();
     no warnings 'uninitialized';
     if (exists $groups->{$gid}) {
-        printf("%s:%s:%hd:%s\n"
+        printf("%s:%s:%ld:%s\n"
                   ,$group
                   ,$groups->{$gid}->{'pw'},
                   ,$gid
@@ -75,7 +75,7 @@ if ($user) {
         my $shell=(exists $okshell{$users->{$user}->{'shell'}})
             ?$users->{$user}->{'shell'}
             :"BAD_SHELL($users->{$user}->{'shell'})";
-        printf("%s:%hd:%hd:%s:%s:%s\n"
+        printf("%s:%ld:%ld:%s:%s:%s\n"
                   ,$user
                   ,$users->{$user}->{'uid'}
                   ,$users->{$user}->{'gid'}
@@ -86,7 +86,7 @@ if ($user) {
 } elsif ($dumpgroups) {
     my $groups = getgroups();
     foreach my $gid (sort {lc $groups->{$a}->{'name'} cmp lc $groups->{$b}->{'name'}} keys %$groups) {
-        printf "%s:%hd:%s\n"
+        printf "%s:%ld:%s\n"
                   ,$groups->{$gid}->{'name'}
                   ,$gid
                   ,join(",",sort {lc $a cmp lc $b} keys %{$groups->{$gid}->{'users'}});
