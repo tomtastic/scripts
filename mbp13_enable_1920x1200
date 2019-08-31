@@ -5,13 +5,13 @@
 # 1) Boot into Recovery Mode
 # 2) Open Terminal, run 'csrutil disable && reboot'
 # 3) Boot into Recovery Mode (again)
-# 4) Open Disk Utility, mount the internal disk, quit Disk Utility
+# 4) Open Disk Utility, mount the internal system and data volumes, quit Disk Utility
 # 5) Open Terminal, find this scripts location, run script
 # 6) Run 'csrutil enable && reboot'
 
 # Check if we're running in recovery mode and adjust the path accordingly
-if pgrep -lfq '/usr/libexec/dfrRecoveryd'; then
-    recovery=$(mount | grep "/Volumes.*apfs" | sed 's/.*\/V/\/V/;s/\ (.*//')
+if ps -ef | grep -v grep | grep -q '/usr/libexec/dfrRecoveryd'; then
+    recovery=$(mount | grep "/Volumes.*apfs" | grep -v nobrowse | sed 's/.*\/V/\/V/;s/\ (.*//')
     override_base="${recovery}/System/Library/Displays/Contents/Resources/Overrides"
 else
     override_base="/System/Library/Displays/Contents/Resources/Overrides"
