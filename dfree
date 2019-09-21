@@ -1,0 +1,15 @@
+#!/bin/bash
+# Used by Samba to grok ZFS free space
+
+if [[ -n "$1" ]]; then
+    P="$1"
+else
+    P=$(pwd)
+fi
+
+USED=$(( $(zfs get -o value -Hp used "$P" 2>/dev/null || echo 1) / 1024)) > /dev/null
+AVAIL=$(( $(zfs get -o value -Hp available "$P" 2>/dev/null || echo 1) / 1024)) > /dev/null
+
+TOTAL=$((USED+AVAIL)) > /dev/null
+
+echo $TOTAL $AVAIL
