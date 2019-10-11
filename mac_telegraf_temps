@@ -1,0 +1,47 @@
+#!/bin/sh
+# 2019-10-11 - TRCM - Get CSV format MacOS temperatures (in telegraf format).
+
+# Requirements :
+# $ gem install iStats
+# $ brew install gawk
+# $ istats scan
+# $ istats enable Th1H      # NB/CPU/GPU HeatPipe 1 Proximity temp
+# $ istats enable TB0T      # Battery TS_MAX temp
+# $ istats enable TCGC      # PECI GPU temp
+# $ istats enable TCXC      # PECI CPU temp
+# $ istats enable TM0P      # Memory Slot Proximity temp
+# $ istats enable TPCD      # Platform Controller Hub Die temp
+# $ istats enable TW0P      # AirPort Proximity temp
+
+# Setup telegraf.conf to run this script :
+#[[outputs.influxdb]]
+#urls = ["http://192.168.0.18:8086"]
+#[[inputs.exec]]
+#  commands = [
+#      "/path/to/this/script/mac_telegraf_temps"
+#  ]
+#  data_format = "csv"
+#  csv_header_row_count = 1
+#  csv_measurement_column = "measurement"
+
+
+# Test it all works
+# ~/Downloads/telegraf$ usr/bin/telegraf --config etc/telegraf/telegraf.conf --test
+
+# Run telegraf and start feeding data into an InfluxDB instance
+# ~/Downloads/telegraf  usr/bin/telegraf --config etc/telegraf/telegraf.conf
+
+
+istats extra --no-graphs --no-scale | \
+    gawk -F: '{
+        gsub(" ","_",$1);
+        gsub(" ","",$2);
+        if (NR==1) {
+            head=$1;val=$2
+        } else {
+             head=head","$1;
+             val=val","$2
+        }
+    } END {
+        print "measurement,"head"\n" "temp,"val
+    }'
