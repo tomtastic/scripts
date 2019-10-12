@@ -29,7 +29,7 @@
 # ~/Downloads/telegraf$ usr/bin/telegraf --config etc/telegraf/telegraf.conf --test
 
 # Run telegraf and start feeding data into an InfluxDB instance
-# ~/Downloads/telegraf  usr/bin/telegraf --config etc/telegraf/telegraf.conf
+# ~/Downloads/telegraf$ usr/bin/telegraf --config etc/telegraf/telegraf.conf
 
 
 istats extra --no-graphs --no-scale | \
