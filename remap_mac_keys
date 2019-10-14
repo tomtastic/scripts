@@ -33,6 +33,8 @@ SECTION="0x700000064"
 ESCAPE="0x700000029"
 #CAPS_LOCK="0x700000039"
 #BACKQUOTE="0x700000035"
+INSERT="0x700000049"
+F13="0x700000068"
 #L_SHIFT="0x7000000E1"
 #R_COMMAND="0x7000000E7"
 #L_CONTROL="0x7000000E0"
@@ -40,6 +42,8 @@ ESCAPE="0x700000029"
 if hidutil list | grep -q 'Magic Keyboard with Numeric Keypad'; then
     # Keyboard WITH an escape key, set 'section' key to defaults
     Map ${SECTION} ${SECTION}
+    # Keyboard WITHOUT an insert key, set F13 key to insert
+    Map ${F13} ${INSERT}
 elif hidutil list | grep -q 'Touch Bar Display'; then
     # Probably a virtual escape key, remap 'section' to 'esc'
     Map ${SECTION} ${ESCAPE}
