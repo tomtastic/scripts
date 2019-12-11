@@ -1,0 +1,212 @@
+#!/bin/bash
+# 2019/12/9  - TRCM - Initial create from tunnelbroker-update
+# 2019/12/11 - TRCM - Add force update parameter
+# 2012/12/11 - TRCM - Bash v4 associative arrays for no real reason
+
+# Edit these with your Cloudflare details
+LOGIN='cloudflare_email_goes_here'
+GLOBAL_KEY='put_your_global_key_here'
+ZONE_NAME='your_dns_zone'
+declare -A RECORD_NAMES
+# An associative array of A-records to Cloudflare_IDs
+RECORD_NAMES=(
+        ['a_DNS_A_records_to_update']=""
+    )
+
+# Probably no need to edit below here ...
+CURLOPTS="--ipv4 --location --max-time 15 --silent --show-error"
+IPCHECKERS=(
+        'http://www.ipchicken.com/'
+        'http://icanhazip.com'
+        'http://dns.loopia.se/checkip/checkip.php'
+    )
+LOGFILE=/tmp/$(basename "$0").$(date +%Y%m%d).out
+WAN_IPOLD=$(tail -1 "$0" | sed 's/\t.*//')
+[ "$1" ] && VERBOSE="true"
+[ "$1" == "-f" ] && VERBOSE="true" && FORCE="true"
+
+
+function sanity_check {
+    # Does LOGFILE exist and is it writable?
+    if [[ -w "$LOGFILE" ]]; then
+        true>"$LOGFILE"
+    else
+        echo "Cant write to logfile!"
+        exit 1
+    fi
+
+    #TODO
+    # Have zone and record names been set?
+
+    # Do the necessary binaries exist?
+    command -V curl >/dev/null 2>&1 || { echo "No CURL available!"; exit 1; }
+    command -V grep >/dev/null 2>&1 || { echo "No grep available!"; exit 1; }
+    command -V tail >/dev/null 2>&1 || { echo "No tail available!"; exit 1; }
+    command -V sed  >/dev/null 2>&1 || { echo "No sed available!"; exit 1; }
+}
+
+
+function cloudflare_check {
+    # Call with ("$LOGIN" "$GLOBAL_KEY" "$ZONE_NAME" "$RECORD_NAME")
+    HEADER_LOGIN="X-Auth-Email: $1"
+    HEADER_KEY="X-Auth-Key: $2"
+    HEADER_TYPE='Content-Type: application/json'
+    local ZONE_NAME=$3
+    local RECORD_NAME=$4
+
+    # Can Cloudflare find and translate our zone name to a zone ID?
+    # shellcheck disable=SC2086
+    ZONE_ID=$(
+        curl $CURLOPTS -X GET \
+        "https://api.cloudflare.com/client/v4/zones?name=$ZONE_NAME" \
+        -H "$HEADER_LOGIN" -H "$HEADER_KEY" -H "$HEADER_TYPE" \
+        | grep -Po '(?<="id":")[^"]*' \
+        | head -1
+    )
+    echo "ZONE_ID: ${ZONE_ID}" >> "$LOGFILE"
+    if [[ "$ZONE_ID" == "" ]]; then
+        echo "Failed to translate zone name ($ZONE_NAME) to ID"
+        exit 1
+    fi
+
+    # Can Cloudflare find and translate our record names to a record ID?
+    for RECORD_NAME in "${!RECORD_NAMES[@]}"; do
+        # shellcheck disable=SC2086
+        RECORD_NAMES["$RECORD_NAME"]=$(
+            curl $CURLOPTS -X GET \
+            "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?type=A&name=$RECORD_NAME" \
+            -H "$HEADER_LOGIN" -H "$HEADER_KEY" -H "$HEADER_TYPE" \
+            | grep -Po '(?<="id":")[^"]*'
+        )
+        if [[ "${RECORD_NAMES[$RECORD_NAME]}" == "" ]]; then
+            echo "Failed to translate 'A' record name ($RECORD_NAME) to ID"
+            exit 1
+        else
+            echo "RECORD_ID($RECORD_NAME): ${RECORD_NAMES[$RECORD_NAME]}" >> "$LOGFILE"
+        fi
+    done
+}
+
+
+function cloudflare_update {
+    # Call with ("$LOGIN" "$GLOBAL_KEY" "$ZONE_ID" "$RECORD_ID" "$RECORD_NAME" "$WAN_IP")
+    HEADER_LOGIN="X-Auth-Email: $1"
+    HEADER_KEY="X-Auth-Key: $2"
+    HEADER_TYPE='Content-Type: application/json'
+    local ZONE_ID=$3
+    local RECORD_ID=$4
+    local RECORD_NAME=$5
+    local WAN_IP=$6
+    API_URL="https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID"
+    #logger -s -t cloudflare "IP update required from $WAN_IPOLD --> $WAN_IP"
+
+    # First we make a note of what we're trying to send to Cloudflare in the log
+    echo Command to send : \
+        curl "$CURLOPTS" \
+        -X PUT "$API_URL" \
+        -H "$HEADER_LOGIN" \
+        -H "<SECRET_API_KEY>" \
+        -H "$HEADER_TYPE" \
+        --data "{\"id\":\"$ZONE_ID\",\"type\":\"A\",\"name\":\"$RECORD_NAME\",\"content\":\"$WAN_IP\"}"  >> "$LOGFILE"
+    # Now we issue the request to Cloudflare
+    echo "Response :" >>"$LOGFILE"
+    local RESPONSE
+    # shellcheck disable=SC2086
+    RESPONSE=$(curl $CURLOPTS \
+        -X PUT "$API_URL" \
+        -H "$HEADER_LOGIN" \
+        -H "$HEADER_KEY" \
+        -H "$HEADER_TYPE" \
+        --data "{\"id\":\"$ZONE_ID\",\"type\":\"A\",\"name\":\"$RECORD_NAME\",\"content\":\"$WAN_IP\"}" 2>&1)
+    # shellcheck disable=SC2181
+    if [[ $? -ne 0 ]] || [[ "$RESPONSE" =~ '"success":false' ]]; then
+        echo "$RESPONSE" >>"$LOGFILE"
+        [[ $VERBOSE ]] && echo " ! Updating Cloudflare with our new IP failed" && exit 3
+        exit 3
+    else
+        echo "$RESPONSE" >>"$LOGFILE"
+        [[ $VERBOSE ]] && echo " + Updated Cloudflare with our new IP"
+        # Write the new WAN IP to the end of this file
+        if [[ "$WAN_IP" != "$WAN_IPOLD" ]]; then
+            echo -e "$WAN_IP\\t# $(date '+%Y/%m/%d %T %Z')" >> "$0"
+            WAN_IPOLD="$WAN_IP"
+        fi
+    fi
+}
+
+
+function checkarray {
+    # Randomise the IPCHECKERS array
+    for url in "${TEMPARRAY[@]}"; do
+        [[ "$url" == "$1" ]] && return 0 # Exists in the randomised array
+    done
+    return 1 # Not found
+}
+
+
+function randomisearray {
+    TEMPARRAY=()
+    while [[ "${#TEMPARRAY[@]}" -ne "${#IPCHECKERS[@]}" ]]
+    do
+        RAND=$(( RANDOM % ${#IPCHECKERS[@]} ))
+        checkarray "${IPCHECKERS[$RAND]}" || TEMPARRAY=("${TEMPARRAY[@]}" "${IPCHECKERS[$RAND]}")
+    done
+    IPCHECKERS=("${TEMPARRAY[@]}")
+}
+
+
+function findwanip {
+    randomisearray
+
+    # Walk the randomised list and try to get our WAN IP
+    try=0
+    for ipchecker in "${IPCHECKERS[@]}"; do
+        try=$((try+1))
+        local WAN_IP
+        # shellcheck disable=SC2086
+        WAN_IP=$(
+            curl $CURLOPTS "$ipchecker" 2>&1 \
+                | grep -E -m1 -o '([[:digit:]]{1,3}\.){3}[[:digit:]]{1,3}'
+        )
+        local WAN_IPLENGTH
+        local WAN_IPLENGTH="${#WAN_IP}"
+        if [[ "$WAN_IPLENGTH" -lt 7 ]] || [[ "$WAN_IPLENGTH" -gt 16 ]]; then
+            #logger -s -t cloudflare "Discovery failed using \"$ipchecker\", attempt ($try/${#IPCHECKERS[@]})"
+            [[ $VERBOSE ]] && echo "Discovery failed using \"$ipchecker\", attempt ($try/${#IPCHECKERS[@]})" >&2
+            if [[ $try -eq ${#IPCHECKERS[@]} ]]; then
+                [[ $VERBOSE ]] && echo " ! Ran out of IP checkers to try" >&2
+                exit 1
+            fi
+        else
+            [[ $VERBOSE ]] && echo " - Found our WAN IP $WAN_IP using \"$ipchecker\"" >&2
+            break
+        fi
+    done
+    # Return the found WAN IP address
+    echo "$WAN_IP"
+}
+
+
+# Check some basics
+sanity_check
+
+# Try to get our current WAN IP address
+WAN_IP=$(findwanip)
+
+# Check Cloudflare knows about us
+cloudflare_check "$LOGIN" "$GLOBAL_KEY" "$ZONE_NAME" "$RECORD_NAME"
+
+# If we get this far, we can tell Cloudflare our new WAN IP
+if [[ "$WAN_IP" != "$WAN_IPOLD" ]] || [[ "$FORCE" == "true" ]]; then
+    for RECORD_NAME in "${!RECORD_NAMES[@]}"; do
+        cloudflare_update "$LOGIN" "$GLOBAL_KEY" "$ZONE_ID" "${RECORD_NAMES[$RECORD_NAME]}" "$RECORD_NAME" "$WAN_IP"
+    done
+else
+    [[ $VERBOSE ]] && echo " - WAN IP $WAN_IP isn't new, exiting"
+    exit 0
+fi
+
+
+exit
+# Old IP history stored inline here, do not edit!
+127.0.0.1		# Force initial update
