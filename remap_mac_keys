@@ -1,24 +1,5 @@
 #!/bin/sh
 # Credit to Brad Howes
-
-# You can run this at login by putting the below into
-# ~/Library/LaunchAgents/com.user.loginscript.plist
-#
-#   <?xml version="1.0" encoding="UTF-8"?>
-#   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-#   <plist version="1.0">
-#   <dict>
-#       <key>Label</key>
-#       <string>com.user.loginscript</string>
-#       <key>ProgramArguments</key>
-#       <array>
-#           <string>/usr/local/bin/remap_mac_keys</string>
-#       </array>
-#       <key>RunAtLoad</key>
-#       <true/>
-#   </dict>
-#   </plist>
-
 FROM='"HIDKeyboardModifierMappingSrc"'
 TO='"HIDKeyboardModifierMappingDst"'
 
@@ -29,6 +10,18 @@ Map() # FROM TO
 
 # Referencing :
 # https://opensource.apple.com/source/IOHIDFamily/IOHIDFamily-1035.41.2/IOHIDFamily/IOHIDUsageTables.h.auto.html
+#    kHIDPage_Consumer                 = 0x0C,
+#       kHIDUsage_Csmr_Mute            = 0xE2,    /* On/Off Control */
+#       kHIDUsage_Csmr_VolumeIncrement = 0xE9,    /* Re-Trigger Control */
+#       kHIDUsage_Csmr_VolumeDecrement = 0xEA,    /* Re-Trigger Control */
+#    kHIDPage_KeyboardOrKeypad         = 0x07,    /* USB Device Class Definition for Human Interface Devices (HID).
+#                                                    Note: the usage type for all key codes is Selector (Sel). */
+#       kHIDUsage_KeyboardF10          = 0x43,    /* F10 */
+#       kHIDUsage_KeyboardF11          = 0x44,    /* F11 */
+#       kHIDUsage_KeyboardF12          = 0x45,    /* F12 */
+#       kHIDUsage_KeyboardEscape       = 0x29,    /* Escape */
+#       kHIDUsage_KeyboardCapsLock     = 0x39,    /* Caps Lock */
+#       kHIDUsage_KeyboardF13          = 0x68,    /* F13 */
 SECTION="0x700000064"
 ESCAPE="0x700000029"
 #CAPS_LOCK="0x700000039"
@@ -38,14 +31,28 @@ F13="0x700000068"
 #L_SHIFT="0x7000000E1"
 #R_COMMAND="0x7000000E7"
 #L_CONTROL="0x7000000E0"
+VOL_UP="0xC000000E9"
+VOL_DOWN="0xC000000EA"
+VOL_MUTE="0xC000000E2"
+F10="0x700000043"
+F11="0x700000044"
+F12="0x700000045"
 
 if hidutil list | grep -q 'Magic Keyboard with Numeric Keypad'; then
     # Keyboard WITH an escape key, set 'section' key to defaults
+    echo "Remapping 'SECTION' to 'ESCAPE'"
     Map ${SECTION} ${SECTION}
     # Keyboard WITHOUT an insert key, set F13 key to insert
+    echo "Remapping 'F13' to 'INSERT'"
     Map ${F13} ${INSERT}
+    # Fix LG monitor not supporting volume media keys, remap to standard F10,11,12
+    echo "Remapping 'VOL_UP, VOL_DOWN, VOL_MUTE' to 'F10, F11, F12'"
+    Map ${VOL_MUTE} ${F10}
+    Map ${VOL_DOWN} ${F11}
+    Map ${VOL_UP} ${F12}
 elif hidutil list | grep -q 'Touch Bar Display'; then
     # Probably a virtual escape key, remap 'section' to 'esc'
+    echo "Remapping 'SECTION' to 'ESCAPE'"
     Map ${SECTION} ${ESCAPE}
 fi
 
