@@ -1,21 +1,15 @@
 #!/bin/bash
 # Patch the display overrides file to support 1920x1200 HiDPI resolution
 
-# Shortest steps :
-# 1) Boot into Recovery Mode
-# 2) Open Terminal, run 'csrutil disable && reboot'
-# 3) Boot into Recovery Mode (again)
-# 4) Open Disk Utility, mount the internal system and data volumes, quit Disk Utility
-# 5) Open Terminal, find this scripts location, run script
-# 6) Run 'csrutil enable && reboot'
+### Big Sur...
+# System volume now cryptographically sealed, and even in order to do
+# this 'csrutil authenticated-root disable', you'd be required to disable
+# FileVault, so,... strongly discouraging to do so.
+# However,...
+# We can just place a copy in /Library and its overlayed!
 
-# Check if we're running in recovery mode and adjust the path accordingly
-if ps -ef | grep -v grep | grep -q '/usr/libexec/dfrRecoveryd'; then
-    recovery=$(mount | grep "/Volumes.*apfs" | grep -v nobrowse | sed 's/.*\/V/\/V/;s/\ (.*//')
-    override_base="${recovery}/System/Library/Displays/Contents/Resources/Overrides"
-else
-    override_base="/System/Library/Displays/Contents/Resources/Overrides"
-fi
+system_override_base="/System/Library/Displays/Contents/Resources/Overrides"
+override_base="/Library/Displays/Contents/Resources/Overrides"
 
 echo -n "Checking ioreg for display key... "
 read -r VendorID ProductID <<< "$( \
@@ -33,76 +27,44 @@ else
 fi
 echo " + VendorID  : $VendorID"
 echo " + ProductID : $ProductID"
-override_file="$override_base/DisplayVendorID-$VendorID/DisplayProductID-$ProductID"
-if [[ -n "$recovery" ]]; then
-    override_bkp="$recovery/var/tmp/DisplayProductID-$ProductID.backup_$(date +%Y%m%d)"
-    override_bkp_patched="$recovery/var/tmp/DisplayProductID-$ProductID.patched_$(date +%Y%m%d)"
-else
-    override_bkp="$HOME/Desktop/DisplayProductID-$ProductID.backup_$(date +%Y%m%d)"
-    override_bkp_patched="$HOME/Desktop/DisplayProductID-$ProductID.patched_$(date +%Y%m%d)"
-fi
 
-echo -n "Checking for matching override file... "
-if [[ -f "$override_file" ]]; then
+override_dir="DisplayVendorID-$VendorID"
+override_file="DisplayProductID-$ProductID"
+
+echo -n "Checking for matching override file in the read-only /System ... "
+if [[ -f "$system_override_base/$override_dir/$override_file" ]]; then
     echo "[OK]"
+    echo " + $system_override_base/$override_dir/$override_file"
 else
     echo "[FAILED]"
     exit 1
 fi
 
+echo -n "Checking for /Library display override path ... "
+if [[ -d "$override_base/$override_dir" ]]; then
+    echo "[OK]"
+else
+    sudo mkdir -p "$override_base/$override_dir"
+    echo "[Created]"
+fi
+
 echo -n "Checking for 1920x1200 HiDPI override... "
-if grep -q 'AAAPAAAACWAAAAAB' "$override_file"; then
+if grep -q 'AAAPAAAACWAAAAAB' "$override_base/$override_dir/$override_file" 2>/dev/null; then
     echo "[ENABLED]"
     exit 0
 else
     echo "[NOT PRESENT]"
 fi
 
-echo -n "Checking status of System Integrity Protection... "
-if csrutil status | grep -qi disabled; then
-    echo "[OK]"
-else
-    echo "[FAILED]"
-    echo " ! Cant make changes unless SIP is disabled"
-    if [[ -n "$recovery" ]]; then
-        echo " ! Type 'csrutil disable' in Terminal, and reboot into Recovery Mode"
-    else
-        echo " ! Boot into Recovery Mode, type 'csrutil disable' in Terminal, reboot"
-        exit 1
-    fi
-fi
-
-echo -n "Making backup of override file to $override_bkp... "
-cp -f "$override_file" "$override_bkp"
-if [[ -f "$override_bkp" ]]; then
-    echo "[OK]"
-else
-    echo "[FAILED]"
-    exit 1
-fi
-
-read -rp "OK to to proceed? (Ctrl-C if not) ? "
-
-echo "Patching override file to enable 1920x1200 HiDPI..."
+echo "Creating overlay display override file to enable 1920x1200 HiDPI..."
 awk '/<array\>/ {
     $0 = $0 "\n\t\t<data>AAAPAAAACWAAAAAB</data>"
-} 1' "$override_bkp" 2>/dev/null > "$override_bkp_patched"
-if [[ -n "$recovery" ]]; then
-    cp "$override_bkp_patched" "$override_file" 2>/dev/null
-else
-    sudo cp "$override_bkp_patched" "$override_file" 2>/dev/null
-fi
+} 1' "$system_override_base/$override_dir/$override_file" 2>/dev/null > "$override_base/$override_dir/$override_file"
 
 echo -n "Verifying 1920x1200 HiDPI override... "
-if grep -q 'AAAPAAAACWAAAAAB' "$override_file"; then
+if grep -q 'AAAPAAAACWAAAAAB' "$override_base/$override_dir/$override_file"; then
     echo "[ENABLED]"
-    if [[ -n "$recovery" ]]; then
-        echo " ! Type 'csrutil enable' in Terminal, reboot"
-    else
-        echo " ! Boot into Recovery Mode, type 'csrutil enable' in Terminal, reboot"
-    fi
+    echo " ! Reboot for changes to take effect"
 else
     echo "[FAILED!]"
-    echo " ! Please restore ${override_bkp} to ${override_file}"
-    echo " ! Boot into Recovery Mode, type 'csrutil enable' in Terminal, reboot"
 fi
