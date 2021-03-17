@@ -1,0 +1,33 @@
+#!/usr/bin/env perl
+# 07/04/2015 - TRCM - Natively compare two date,time strings and show the difference
+use Time::Piece;
+
+my $date1;
+my $date2;
+my $diff;
+
+$arg1 = $ARGV[0];
+# FIXME - this is wanky, but how can strptime take DST component?
+$arg1 =~ s/\sGMT$//;
+$arg1 =~ s/\sBST$//;
+$date1 = Time::Piece ->strptime($arg1, "%Y/%m/%d %T");
+
+$arg2 = $ARGV[1];
+# FIXME - this is wanky, but how can strptime take DST component?
+$arg2 =~ s/\sGMT$//;
+$arg2 =~ s/\sBST$//;
+$date2 = Time::Piece ->strptime($arg2, "%Y/%m/%d %T");
+
+if ( $date1 > $date2 ) {
+        print "Earlier datetime first please\n";
+}
+
+$diff=$date2-$date1;
+
+if (defined $ARGV[1]) {
+    printf("%.0f hours\n",$diff->hours);
+    printf("%.0f minutes\n",$diff->minutes);
+    printf("%.0f seconds\n",$diff->seconds);
+} else {
+    printf("Two datetimes in format : 2015/02/26 23:17:13\n")
+}
