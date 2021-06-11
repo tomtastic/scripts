@@ -1,0 +1,128 @@
+#!/bin/bash
+# 2021-05-25 - TRCM - Enumerate DNS ResourceRecords for a given domain,
+#                     using RR table copied from Wikipedia
+
+# NB: Tries to do DNSSEC requests, '+dnssec'...
+
+IP="$1"
+OPT="$2"
+DATA_BEGIN_LINE=$(awk '/^### WIKI_DATA_BEGINS/ {print NR + 1; exit 0;}' "$0")
+DNS_TIMEOUT=3
+
+tail -n +"$DATA_BEGIN_LINE" "$0" | grep -v '^##' | sed 's/^#//' | while read -r; do
+    TYPE=$(echo "$REPLY" | awk -F"\t" '{print $1}')
+    TYPEID=$(echo "$REPLY" | awk -F"\t" '{print $2}')
+    DESC=$(echo "$REPLY" | awk -F"\t" '{print $4}')
+    FUNC=$(echo "$REPLY" | awk -F"\t" '{print $5}')
+    ANS=$(timeout "$DNS_TIMEOUT" dig +noall +answer +multiline +nocrypto +dnssec "$IP" "$TYPE" "$OPT" 2>/dev/null)
+    if [[ "$ANS" != "" ]]; then
+        if echo "$ANS" | grep -q "$TYPE"; then
+            printf "# "
+            printf "\x1b[38;2;0;238;255m%s (%s)\x1b[0m" "$TYPE" "$TYPEID"
+            printf ", "
+            printf "\x1b[38;2;0;170;255m%s\x1b[0m" "$DESC"
+            printf ", "
+            printf "\x1b[38;2;0;100;255m%s\x1b[0m\n" "$FUNC"
+            printf "%s\n" "$ANS"
+        fi
+    fi
+done
+
+### WIKI_DATA_BEGINS - https://en.wikipedia.org/wiki/List_of_DNS_record_types
+## Type,Type ID,Defining RFC,Description,Function
+#A	1	RFC 1035[1]	Address record	Returns a 32-bit IPv4 address, most commonly used to map hostnames to an IP address of the host, but it is also used for DNSBLs, storing subnet masks in RFC 1101, etc.
+#AAAA	28	RFC 3596[2]	IPv6 address record	Returns a 128-bit IPv6 address, most commonly used to map hostnames to an IP address of the host.
+#AFSDB	18	RFC 1183	AFS database record	Location of database servers of an AFS cell. This record is commonly used by AFS clients to contact AFS cells outside their local domain. A subtype of this record is used by the obsolete DCE/DFS file system.
+#APL	42	RFC 3123	Address Prefix List	Specify lists of address ranges, e.g. in CIDR format, for various address families. Experimental.
+#CAA	257	RFC 6844	Certification Authority Authorization	DNS Certification Authority Authorization, constraining acceptable CAs for a host/domain
+#CDNSKEY	60	RFC 7344		Child copy of DNSKEY record, for transfer to parent
+#CDS	59	RFC 7344	Child DS	Child copy of DS record, for transfer to parent
+#CERT	37	RFC 4398	Certificate record	Stores PKIX, SPKI, PGP, etc.
+#CNAME	5	RFC 1035[1]	Canonical name record	Alias of one name to another: the DNS lookup will continue by retrying the lookup with the new name.
+#CSYNC	62	RFC 7477	Child-to-Parent Synchronization	Specify a synchronization mechanism between a child and a parent DNS zone. Typical example is declaring the same NS records in the parent and the child zone
+#DHCID	49	RFC 4701	DHCP identifier	Used in conjunction with the FQDN option to DHCP
+#DLV	32769	RFC 4431	DNSSEC Lookaside Validation record	For publishing DNSSEC trust anchors outside of the DNS delegation chain. Uses the same format as the DS record. RFC 5074 describes a way of using these records.
+#DNAME	39	RFC 6672	Delegation name record	Alias for a name and all its subnames, unlike CNAME, which is an alias for only the exact name. Like a CNAME record, the DNS lookup will continue by retrying the lookup with the new name.
+#DNSKEY	48	RFC 4034	DNS Key record	The key record used in DNSSEC. Uses the same format as the KEY record.
+#DS	43	RFC 4034	Delegation signer	The record used to identify the DNSSEC signing key of a delegated zone
+#EUI48	108	RFC 7043	MAC address (EUI-48)	A 48-bit IEEE Extended Unique Identifier.
+#EUI64	109	RFC 7043	MAC address (EUI-64)	A 64-bit IEEE Extended Unique Identifier.
+#HINFO	13	RFC 8482	Host Information	Providing Minimal-Sized Responses to DNS Queries That Have QTYPE=ANY
+#HIP	55	RFC 8005	Host Identity Protocol	Method of separating the end-point identifier and locator roles of IP addresses.
+#HTTPS	65	IETF Draft	HTTPS Binding	RR that improves performance for clients that need to resolve many resources to access a domain. More info in this IETF Draft by DNSOP Working group and Akamai technologies.
+#IPSECKEY	45	RFC 4025	IPsec Key	Key record that can be used with IPsec
+#KEY	25	RFC 2535[3] and RFC 2930[4]	Key record	Used only for SIG(0) (RFC 2931) and TKEY (RFC 2930).[5] RFC 3445 eliminated their use for application keys and limited their use to DNSSEC.[6] RFC 3755 designates DNSKEY as the replacement within DNSSEC.[7] RFC 4025 designates IPSECKEY as the replacement for use with IPsec.[8]
+#KX	36	RFC 2230	Key Exchanger record	Used with some cryptographic systems (not including DNSSEC) to identify a key management agent for the associated domain-name. Note that this has nothing to do with DNS Security. It is Informational status, rather than being on the IETF standards-track. It has always had limited deployment, but is still in use.
+#LOC	29	RFC 1876	Location record	Specifies a geographical location associated with a domain name
+#MX	15	RFC 1035[1] and RFC 7505	Mail exchange record	Maps a domain name to a list of message transfer agents for that domain
+#NAPTR	35	RFC 3403	Naming Authority Pointer	Allows regular-expression-based rewriting of domain names which can then be used as URIs, further domain names to lookups, etc.
+#NS	2	RFC 1035[1]	Name server record	Delegates a DNS zone to use the given authoritative name servers
+#NSEC	47	RFC 4034	Next Secure record	Part of DNSSEC—used to prove a name does not exist. Uses the same format as the (obsolete) NXT record.
+#NSEC3	50	RFC 5155	Next Secure record version 3	An extension to DNSSEC that allows proof of nonexistence for a name without permitting zonewalking
+#NSEC3PARAM	51	RFC 5155	NSEC3 parameters	Parameter record for use with NSEC3
+#OPENPGPKEY	61	RFC 7929	OpenPGP public key record	A DNS-based Authentication of Named Entities (DANE) method for publishing and locating OpenPGP public keys in DNS for a specific email address using an OPENPGPKEY DNS resource record.
+#PTR	12	RFC 1035[1]	PTR Resource Record [de]	Pointer to a canonical name. Unlike a CNAME, DNS processing stops and just the name is returned. The most common use is for implementing reverse DNS lookups, but other uses include such things as DNS-SD.
+#RP	17	RFC 1183	Responsible Person	Information about the responsible person(s) for the domain. Usually an email address with the @ replaced by a .
+#RRSIG	46	RFC 4034	DNSSEC signature	Signature for a DNSSEC-secured record set. Uses the same format as the SIG record.
+#SIG	24	RFC 2535	Signature	Signature record used in SIG(0) (RFC 2931) and TKEY (RFC 2930).[7] RFC 3755 designated RRSIG as the replacement for SIG for use within DNSSEC.[7]
+#SMIMEA	53	RFC 8162[9]	S/MIME cert association[10]	Associates an S/MIME certificate with a domain name for sender authentication.
+#SOA	6	RFC 1035[1] and RFC 2308[11]	Start of [a zone of] authority record	Specifies authoritative information about a DNS zone, including the primary name server, the email of the domain administrator, the domain serial number, and several timers relating to refreshing the zone.
+#SRV	33	RFC 2782	Service locator	Generalized service location record, used for newer protocols instead of creating protocol-specific records such as MX.
+#SSHFP	44	RFC 4255	SSH Public Key Fingerprint	Resource record for publishing SSH public host key fingerprints in the DNS System, in order to aid in verifying the authenticity of the host. RFC 6594 defines ECC SSH keys and SHA-256 hashes. See the IANA SSHFP RR parameters registry for details.
+#SVCB	64	IETF Draft	Service Binding	RR that improves performance for clients that need to resolve many resources to access a domain. More info in this IETF Draft by DNSOP Working group and Akamai technologies.
+#TA	32768	N/A	DNSSEC Trust Authorities	Part of a deployment proposal for DNSSEC without a signed DNS root. See the IANA database and Weiler Spec for details. Uses the same format as the DS record.
+#TKEY	249	RFC 2930	Transaction Key record	A method of providing keying material to be used with TSIG that is encrypted under the public key in an accompanying KEY RR.[12]
+#TLSA	52	RFC 6698	TLSA certificate association	A record for DANE. RFC 6698 defines "The TLSA DNS resource record is used to associate a TLS server certificate or public key with the domain name where the record is found, thus forming a 'TLSA certificate association'".
+#TSIG	250	RFC 2845	Transaction Signature	Can be used to authenticate dynamic updates as coming from an approved client, or to authenticate responses as coming from an approved recursive name server[13] similar to DNSSEC.
+#TXT	16	RFC 1035[1]	Text record	Originally for arbitrary human-readable text in a DNS record. Since the early 1990s, however, this record more often carries machine-readable data, such as specified by RFC 1464, opportunistic encryption, Sender Policy Framework, DKIM, DMARC, DNS-SD, etc.
+#URI	256	RFC 7553	Uniform Resource Identifier	Can be used for publishing mappings from hostnames to URIs.
+#ZONEMD	63	RFC 8976	Message Digests for DNS Zones	Provides a cryptographic message digest over DNS zone data at rest.
+## Other types and pseudo-RRs
+#*	255	RFC 1035[1]	All cached records	Returns all records of all types known to the name server. If the name server does not have any information on the name, the request will be forwarded on. The records returned may not be complete. For example, if there is both an A and an MX for a name, but the name server has only the A record cached, only the A record will be returned. Sometimes referred to as "ANY", for example in Windows nslookup and Wireshark.
+#AXFR	252	RFC 1035[1]	Authoritative Zone Transfer	Transfer entire zone file from the master name server to secondary name servers.
+#IXFR	251	RFC 1996	Incremental Zone Transfer	Requests a zone transfer of the given zone but only differences from a previous serial number. This request may be ignored and a full (AXFR) sent in response if the authoritative server is unable to fulfill the request due to configuration or lack of required deltas.
+#OPT	41	RFC 6891	Option	This is a pseudo-record type needed to support EDNS.
+## Obsolete record types
+#MD	3	RFC 883	RFC 973	Mail destination (MD) and mail forwarder (MF) records; MAILA is not an actual record type, but a query type which returns MF and/or MD records. RFC 973 replaced these records with the MX record.
+#MF	4
+#MAILA	254
+#MB	7	RFC 883	Not formally obsoleted. Unlikely to be ever adopted (RFC 2505).	MB, MG, MR, and MINFO are records to publish subscriber mailing lists. MAILB is a query code which returns one of those records. The intent was for MB and MG to replace the SMTP VRFY and EXPN commands. MR was to replace the "551 User Not Local" SMTP error. Later, RFC 2505 recommended that both VRFY and EXPN be disabled, making MB and MG unnecessary. They were classified as experimental by RFC 1035.
+#MG	8
+#MR	9
+#MINFO	14
+#MAILB	253
+#WKS	11	RFC 883, RFC 1035	Declared as "not to be relied upon" by RFC 1123 (more in RFC 1127).	Record to describe well-known services supported by a host. Not used in practice. The current recommendation and practice is to determine whether a service is supported on an IP address by trying to connect to it. SMTP is even prohibited from using WKS records in MX processing.[14]
+#NB	32	RFC 1002		Mistakes (from RFC 1002); the numbers are now assigned to NIMLOC and SRV.
+#NBSTAT	33
+#NULL	10	RFC 883	RFC 1035	Obsoleted by RFC 1035. RFC 883 defined "completion queries" (opcode 2 and maybe 3) which used this record. RFC 1035 later reassigned opcode 2 to be "status" and reserved opcode 3.
+#A6	38	RFC 2874	RFC 6563	Defined as part of early IPv6 but downgraded to experimental by RFC 3363; later downgraded to historic by RFC 6563.
+#NXT	30	RFC 2065	RFC 3755	Part of the first version of DNSSEC (RFC 2065). NXT was obsoleted by DNSSEC updates (RFC 3755). At the same time, the domain of applicability for KEY and SIG was also limited to not include DNSSEC use.
+#KEY	25
+#SIG	24
+#HINFO	13	RFC 883	Unobsoleted by RFC 8482. Currently used by Cloudflare in response to queries of the type ANY.[15]	Record intended to provide information about host CPU type and operating system. It was intended to allow protocols to optimize processing when communicating with similar peers.
+#RP	17	RFC 1183		RP may be used for certain human-readable information regarding a different contact point for a specific host, subnet, or other domain level label separate than that used in the SOA record.
+#X25	19		Not in current use by any notable application
+#ISDN	20		Not in current use by any notable application
+#RT	21		Not in current use by any notable application
+#NSAP	22	RFC 1706		Not in current use by any notable application
+#NSAP-PTR	23		Not in current use by any notable application
+#PX	26	RFC 2163		Not in current use by any notable application
+#EID	31	N/A		Defined by the Nimrod DNS internet draft, but never made it to RFC status. Not in current use by any notable application
+#NIMLOC	32	N/A
+#ATMA	34	N/A		Defined by The ATM Forum Committee.[16]
+#APL	42	RFC 3123		Specify lists of address ranges, e.g. in CIDR format, for various address families. Experimental.
+#SINK	40	N/A		Defined by the Kitchen Sink internet draft, but never made it to RFC status
+#GPOS	27	RFC 1712		A more limited early version of the LOC record
+#UINFO	100	N/A		IANA reserved, no RFC documented them [1] and support was removed from BIND in the early 90s.
+#UID	101	N/A
+#GID	102	N/A
+#UNSPEC	103	N/A
+#SPF	99	RFC 4408	RFC 7208	Specified as part of the Sender Policy Framework protocol as an alternative to storing SPF data in TXT records, using the same format. Support for it was discontinued in RFC 7208 due to widespread lack of support.[17][18]
+#NINFO	56	N/A		Used to provide status information about a zone. Requested for the IETF draft "The Zone Status (ZS) DNS Resource Record" in 2008. Expired without adoption.[19]
+#RKEY	57	N/A		Used for encryption of NAPTR records. Requested for the IETF draft "The RKEY DNS Resource Record" in 2008. Expired without adoption.[20]
+#TALINK	58	N/A		Defined by the DNSSEC Trust Anchor History Service internet draft, but never made it to RFC status
+#NID	104	RFC 6742		Not in use by any notable application and marked as "experimental"
+#L32	105
+#L64	106
+#LP	107
+#DOA	259	N/A		Defined by the DOA over DNS internet draft, but never made it to RFC status
